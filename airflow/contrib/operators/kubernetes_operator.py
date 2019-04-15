@@ -187,7 +187,6 @@ class KubernetesJobOperator(BaseOperator):
             'delete',
             '--grace-period=120',        # after 120 secs, stop waiting
             '--ignore-not-found=true',   # in case we hit an edge case on retry
-            '--wait=false',              # do not wait for finalizers to finish
             'job',
             job_name
         ])
