@@ -124,3 +124,4 @@ ENV/
 
 # Spark
 rat-results.txt
+.vscode/

@@ -182,7 +182,15 @@ class KubernetesJobOperator(BaseOperator):
         """
         Deletes the job. Deleting the job deletes are related pods.
         """
-        result = KubernetesJobOperator.retryable_check_output(args=['kubectl', 'delete', 'job', job_name])
+        result = KubernetesJobOperator.retryable_check_output(args=[
+            'kubectl',
+            'delete',
+            '--grace-period=120',        # after 120 secs, stop waiting
+            '--ignore-not-found=true',   # in case we hit an edge case on retry
+            '--wait=false',              # do not wait for finalizers to finish
+            'job',
+            job_name
+        ])
         logging.info(result)
 
     def on_kill(self):
