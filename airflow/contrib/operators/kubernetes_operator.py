@@ -5,7 +5,7 @@ from airflow.contrib.utils.kubernetes_utils import dict_to_env, uniquify_job_nam
     KubernetesSecretParameter
 from airflow.contrib.utils.parameters import enumerate_parameters
 from datetime import datetime
-import json
+import ujson as json
 import logging
 import os
 import re
