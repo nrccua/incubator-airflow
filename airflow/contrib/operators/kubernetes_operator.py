@@ -263,7 +263,7 @@ class KubernetesJobOperator(BaseOperator):
                 else:
                     status = "pending"
 
-                logging.info('Current status is: %s' % matched.group(0))
+                logging.info('Current status is: %s' % status)
 
                 if "pending" == status:
                     pass
