@@ -5,7 +5,7 @@ from airflow.contrib.utils.kubernetes_utils import dict_to_env, uniquify_job_nam
     KubernetesSecretParameter
 from airflow.contrib.utils.parameters import enumerate_parameters
 from datetime import datetime
-import json
+import ujson as json
 import logging
 import os
 import re
@@ -244,17 +244,35 @@ class KubernetesJobOperator(BaseOperator):
                 time.sleep(self.sleep_seconds_between_polling)
 
                 pod_output = self.get_pods(job_name)
-                job_description = KubernetesJobOperator.retryable_check_output(['kubectl', 'describe', 'job', job_name])
-                matched = re.search(r'(\d+) Running / \d+ Succeeded / (\d+) Failed', job_description)
-                logging.info('Current status is: %s' % matched.group(0))
 
-                running_job_count = int(matched.group(1))
-                failed_job_count = int(matched.group(2))
-                if failed_job_count != 0:
+                job_description = json.loads(KubernetesJobOperator.retryable_check_output(
+                    ['kubectl', 'get', 'job', "-o", "json", job_name])
+                )
+
+                status_block = job_description['status']
+
+                if 'succeeded' in status_block and 'failed' in status_block:
+                    raise Exception("Invalid status block containing both succeeded and failed: %s", json.dumps(status_block))
+
+                if 'active' in status_block:
+                    status = 'running'
+                elif 'failed' in status_block:
+                    status = "failed"
+                elif 'succeeded' in status_block:
+                    status = 'complete'
+                else:
+                    status = "pending"
+
+                logging.info('Current status is: %s' % status)
+
+                if "pending" == status:
+                    pass
+
+                if "failed" == status:
                     self.log_container_logs(job_name)
                     raise Exception('%s has failed pods, failing task.' % job_name)
 
-                if running_job_count == 0:
+                if "complete" == status:
                     return pod_output
 
                 # Determine if we have any containers left running in each pod of the job.
