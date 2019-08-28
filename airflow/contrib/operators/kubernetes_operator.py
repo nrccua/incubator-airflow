@@ -103,7 +103,6 @@ class KubernetesJobOperator(BaseOperator):
         self.cloudsql_connections = (cloudsql_connections or [])
 
         self.volumes = volumes or []
-        self.pod_log_lines = {}
 
     @staticmethod
     def from_job_yaml(job_yaml_string,
@@ -207,16 +206,11 @@ class KubernetesJobOperator(BaseOperator):
             for container in pod['spec']['containers']:
                 container_name = container['name']
                 extra = dict(pod=pod_name, container=container_name)
+                logging.info('LOGGING OUTPUT FROM JOB [%s/%s]:' % (pod_name, container_name), extra=extra)
                 output = retryable_check_output(
                     args=['kubectl', 'logs', pod_name, container_name])
-                pod_name_container_name = pod_name + "/" + container_name
-                if pod_name_container_name not in self.pod_log_lines:
-                    self.pod_log_lines[str(pod_name_container_name)] = 0
-                log_difference = len(output.splitlines()) - self.pod_log_lines[pod_name_container_name]
-                if log_difference > 0:
-                    logging.info('LOGGING OUTPUT FROM JOB [%s/%s]:' % (pod_name, container_name), extra=extra)
-                    self.pod_log_lines[pod_name_container_name] += log_difference
-                    logging.info("\n".join(output.splitlines()[-log_difference:]), extra=extra)
+                for line in output.splitlines():
+                    logging.info(line, extra=extra)
 
     def poll_job_completion(self, job_name, dependent_containers={'cloudsql-proxy'}):
         """
@@ -299,7 +293,6 @@ class KubernetesJobOperator(BaseOperator):
                                     raise Exception('%s has failed pods, failing task.' % job_name)
                             else:
                                 live_cnt += 1
-                                self.log_container_logs(job_name)
 
                         if live_cnt > 0:
                             has_live = True
