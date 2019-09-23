@@ -1,13 +1,12 @@
 import ast
 import jinja2
 
-from airflow.contrib.utils.parameters import enumerate_parameters
-from airflow.utils.helpers import is_container
 from collections import namedtuple
 from datetime import datetime
 import hashlib
 import re
-
+import subprocess
+import logging
 
 DEFAULT_YAML_TEMPLATE = """
 apiVersion: batch/v1
@@ -35,6 +34,25 @@ spec:
       restartPolicy: Never
   backoffLimit: 0
 """
+
+
+def retryable_check_output(args, retry_count=3):
+    """
+    Reads the job description, retrying on failure
+    :param args: Arguments to pass to subprocess.check_output
+    :type args: List of string
+    :param retry_count: Number of times to retry (default=3)
+    :type retry_count: int
+    :return: string
+    """
+    try:
+        return subprocess.check_output(args=args)
+    except subprocess.CalledProcessError as e:
+        if retry_count > 0:
+            logging.info("Retrying check_output because %s" % e)
+            return retryable_check_output(args=args, retry_count=retry_count - 1)
+        else:
+            raise
 
 
 def generate_yaml(kubernetes_job_yaml_dictionary):
@@ -75,6 +93,7 @@ class KubernetesContainerInformation(object):
     Information for an individual container,
     used to generate Kubernetes Job yamls.
     """
+
     def __init__(self,
                  name,
                  image,
@@ -89,6 +108,7 @@ class KubernetesContainerInformation(object):
 
     @staticmethod
     def unknown_to_array(value):
+        from airflow.utils.helpers import is_container
         if value is None or len(value) == 0:
             return None
 
@@ -133,6 +153,7 @@ def dict_to_env(source, task_instance, context=None):
                     instead of a task instance
     :return: list of name:value dictionaries
     """
+    from airflow.contrib.utils.parameters import enumerate_parameters
 
     retval = []
     for k, v in source.iteritems():

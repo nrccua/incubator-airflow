@@ -42,7 +42,7 @@ class FileTaskHandler(logging.Handler):
         self.filename_template = filename_template
         self.filename_jinja_template = None
 
-        if "{{" in self.filename_template: #jinja mode
+        if "{{" in self.filename_template:  # jinja mode
             self.filename_jinja_template = Template(self.filename_template)
 
     def set_context(self, ti):
@@ -150,8 +150,13 @@ class FileTaskHandler(logging.Handler):
             try_numbers = [try_number]
 
         logs = [''] * len(try_numbers)
-        for i, try_number in enumerate(try_numbers):
-            logs[i] += self._read(task_instance, try_number)
+
+        try:
+            for i, try_number in enumerate(try_numbers):
+                logs[i] += self._read(task_instance, try_number)
+
+        except TypeError as error:
+            logging.info('Nothing is available to log right now. %s ' % error)
 
         return logs
 

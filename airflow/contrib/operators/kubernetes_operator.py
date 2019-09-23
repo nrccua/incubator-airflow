@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import yaml
+from airflow.contrib.utils.kubernetes_utils import retryable_check_output
 
 
 class KubernetesJobOperator(BaseOperator):
@@ -102,6 +103,7 @@ class KubernetesJobOperator(BaseOperator):
         self.cloudsql_connections = (cloudsql_connections or [])
 
         self.volumes = volumes or []
+        self.pod_log_lines = {}
 
     @staticmethod
     def from_job_yaml(job_yaml_string,
@@ -135,7 +137,7 @@ class KubernetesJobOperator(BaseOperator):
 
         # this is potentially Bluecore specific: secrets are optional
         service_account_secret_name = service_account_secret_name or \
-            job_data['spec']['template']['spec']['volumes'][0]['secret']['secretName']
+                                      job_data['spec']['template']['spec']['volumes'][0]['secret']['secretName']
 
         # this is gross and horrible, but we have to convert the list-of-name/value-dicts that
         # are environment variables in a container spec into a dictionary.
@@ -159,34 +161,15 @@ class KubernetesJobOperator(BaseOperator):
             **kwargs
         )
 
-    @staticmethod
-    def retryable_check_output(args, retry_count=3):
-        """
-        Reads the job description, retrying on failure
-        :param args: Arguments to pass to subprocess.check_output
-        :type args: List of string
-        :param retry_count: Number of times to retry (default=3)
-        :type retry_count: int
-        :return: string
-        """
-        try:
-            return subprocess.check_output(args=args)
-        except subprocess.CalledProcessError as e:
-            if retry_count > 0:
-                logging.info("Retrying check_output because %s" % e)
-                return KubernetesJobOperator.retryable_check_output(args=args, retry_count=retry_count - 1)
-            else:
-                raise
-
     def clean_up(self, job_name):
         """
         Deletes the job. Deleting the job deletes are related pods.
         """
-        result = KubernetesJobOperator.retryable_check_output(args=[
+        result = retryable_check_output(args=[
             'kubectl',
             'delete',
-            '--grace-period=120',        # after 120 secs, stop waiting
-            '--ignore-not-found=true',   # in case we hit an edge case on retry
+            '--grace-period=120',  # after 120 secs, stop waiting
+            '--ignore-not-found=true',  # in case we hit an edge case on retry
             'job',
             job_name
         ])
@@ -205,7 +188,7 @@ class KubernetesJobOperator(BaseOperator):
             raise Exception('Job was killed')
 
     def get_pods(self, job_name):
-        return json.loads(KubernetesJobOperator.retryable_check_output(args=[
+        return json.loads(retryable_check_output(args=[
             'kubectl', 'get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]))
 
     def log_container_logs(self, job_name, pod_output=None):
@@ -224,11 +207,16 @@ class KubernetesJobOperator(BaseOperator):
             for container in pod['spec']['containers']:
                 container_name = container['name']
                 extra = dict(pod=pod_name, container=container_name)
-                logging.info('LOGGING OUTPUT FROM JOB [%s/%s]:' % (pod_name, container_name), extra=extra)
-                output = KubernetesJobOperator.retryable_check_output(
+                output = retryable_check_output(
                     args=['kubectl', 'logs', pod_name, container_name])
-                for line in output.splitlines():
-                    logging.info(line, extra=extra)
+                pod_name_container_name = pod_name + "/" + container_name
+                if pod_name_container_name not in self.pod_log_lines:
+                    self.pod_log_lines[str(pod_name_container_name)] = 0
+                log_difference = len(output.splitlines()) - self.pod_log_lines[pod_name_container_name]
+                if log_difference > 0:
+                    logging.info('LOGGING OUTPUT FROM JOB [%s/%s]:' % (pod_name, container_name), extra=extra)
+                    self.pod_log_lines[pod_name_container_name] += log_difference
+                    logging.info("\n".join(output.splitlines()[-log_difference:]), extra=extra)
 
     def poll_job_completion(self, job_name, dependent_containers={'cloudsql-proxy'}):
         """
@@ -245,14 +233,15 @@ class KubernetesJobOperator(BaseOperator):
 
                 pod_output = self.get_pods(job_name)
 
-                job_description = json.loads(KubernetesJobOperator.retryable_check_output(
+                job_description = json.loads(retryable_check_output(
                     ['kubectl', 'get', 'job', "-o", "json", job_name])
                 )
 
                 status_block = job_description['status']
 
                 if 'succeeded' in status_block and 'failed' in status_block:
-                    raise Exception("Invalid status block containing both succeeded and failed: %s", json.dumps(status_block))
+                    raise Exception("Invalid status block containing both succeeded and failed: %s",
+                                    json.dumps(status_block))
 
                 if 'active' in status_block:
                     status = 'running'
@@ -310,6 +299,7 @@ class KubernetesJobOperator(BaseOperator):
                                     raise Exception('%s has failed pods, failing task.' % job_name)
                             else:
                                 live_cnt += 1
+                                self.log_container_logs(job_name)
 
                         if live_cnt > 0:
                             has_live = True
@@ -445,7 +435,7 @@ class KubernetesJobOperator(BaseOperator):
         kub_job_dict = {
             'apiVersion': 'batch/v1',
             'kind': 'Job',
-            'metadata': { 'name': unique_job_name },
+            'metadata': {'name': unique_job_name},
             'spec': {
                 'template': {
                     'spec': {
@@ -464,6 +454,7 @@ class KubernetesJobOperator(BaseOperator):
         job_name, job_yaml_string = self.create_job_yaml(context)
         logging.info(job_yaml_string)
         self.instance_names.append(job_name)  # should happen once, but safety first!
+        self.xcom_push(context, "kubernetes_job_name", job_name)
 
         with tempfile.NamedTemporaryFile(suffix='.yaml') as f:
             f.write(job_yaml_string)

@@ -27,6 +27,7 @@ default_args = {
     'depends_on_past': True,
     'start_date': utils.dates.days_ago(2)
 }
+
 dag = DAG(DAG_NAME, schedule_interval='*/10 * * * *', default_args=default_args)
 
 run_this_1 = DummyOperator(task_id='run_this_1', dag=dag)
