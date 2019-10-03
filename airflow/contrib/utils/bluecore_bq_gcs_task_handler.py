@@ -71,7 +71,7 @@ class BQGCSTaskHandler(GCSTaskHandler):
             # TODO: PROD-19910 job_name is always none on the first try, should fix this so an exception doesn't show each time
             job_name = ti.xcom_pull(task_ids=ti.task_id, key='kubernetes_job_name')
             if job_name is None:
-                raise Exception("There is no XCOM kubernetes_job_name. Something is exploding.")
+                return "An XCOM kubernetes_job_name was not found."
 
             pod_output = BQGCSTaskHandler.get_pods(job_name)
 
