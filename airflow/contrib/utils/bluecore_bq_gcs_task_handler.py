@@ -11,6 +11,7 @@
 
 
 from google.cloud import bigquery
+from google.cloud.exceptions import BadRequest
 import os
 from airflow.utils.log.gcs_task_handler import GCSTaskHandler
 from airflow import configuration
@@ -71,7 +72,8 @@ class BQGCSTaskHandler(GCSTaskHandler):
             # TODO: PROD-19910 job_name is always none on the first try, should fix this so an exception doesn't show each time
             job_name = ti.xcom_pull(task_ids=ti.task_id, key='kubernetes_job_name')
             if job_name is None:
-                return "An XCOM kubernetes_job_name was not found."
+                return "An XCOM kubernetes job_name was not found. This does not mean the job has failed. It is " \
+                       "possible that a job_name has not yet been created. Try refreshing the page. "
 
             pod_output = BQGCSTaskHandler.get_pods(job_name)
 
@@ -99,12 +101,20 @@ class BQGCSTaskHandler(GCSTaskHandler):
                  for
                  bq_table_name, pod_id in tables]) + "\n ORDER BY pod_id, logName, timestamp")
 
-            query_job = client.query(query)
-            result = query_job.result()
+            try:
+                query_job = client.query(query)
+                result = query_job.result()
+            except BadRequest as e:
+                return "BadRequest error from BigQuery. The query may be empty or the job finished. Try refreshing " \
+                       "the page. \n {e}".format(e=e)
 
-            for row in result:
-                log_lines.append("{}  {}".format(row.logName, row.textPayload))
-            return "\n".join(log_lines)
+            log_name = ""
+            for index, row in enumerate(result):
+                if row.logName.split("/")[-1:][0] != log_name:
+                    log_name = row.logName.split("/")[-1:][0]
+                    log_lines.append("LOGGING OUTPUT FROM {log_name} \n".format(log_name=log_name))
+                log_lines.append("{}  {}".format(row.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-4], row.textPayload))
+            return "".join(log_lines)
 
         # else statement taken from gcs_task_handler.py
         else:
