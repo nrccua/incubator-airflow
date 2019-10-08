@@ -11,6 +11,7 @@
 
 
 from google.cloud import bigquery
+from google.cloud.exceptions import BadRequest
 import os
 from airflow.utils.log.gcs_task_handler import GCSTaskHandler
 from airflow import configuration
@@ -100,12 +101,20 @@ class BQGCSTaskHandler(GCSTaskHandler):
                  for
                  bq_table_name, pod_id in tables]) + "\n ORDER BY pod_id, logName, timestamp")
 
-            query_job = client.query(query)
-            result = query_job.result()
+            try:
+                query_job = client.query(query)
+                result = query_job.result()
+            except BadRequest as e:
+                return "BadRequest error from BigQuery. The query may be empty or the job finished. Try refreshing " \
+                       "the page. \n {e}".format(e=e)
 
-            for row in result:
-                log_lines.append("{}  {}".format(row.logName, row.textPayload))
-            return "\n".join(log_lines)
+            log_name = ""
+            for index, row in enumerate(result):
+                if row.logName.split("/")[-1:][0] != log_name:
+                    log_name = row.logName.split("/")[-1:][0]
+                    log_lines.append("LOGGING OUTPUT FROM {log_name} \n".format(log_name=log_name))
+                log_lines.append("{}  {}".format(row.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-4], row.textPayload))
+            return "".join(log_lines)
 
         # else statement taken from gcs_task_handler.py
         else:
