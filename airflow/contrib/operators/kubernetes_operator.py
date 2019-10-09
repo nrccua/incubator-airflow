@@ -27,7 +27,6 @@ class KubernetesJobOperator(BaseOperator):
                  service_account_secret_name=None,
                  sleep_seconds_between_polling=15,
                  cloudsql_connections=None,
-                 do_xcom_push=False,  # TODO: [2018-05-09 dangermike] remove this once next_best is no longer using it
                  *args,
                  **kwargs):
 
@@ -35,10 +34,10 @@ class KubernetesJobOperator(BaseOperator):
         KubernetesJobOperator will:
         1. Create a job given a Kubernetes job yaml
         2. Poll for the job's success/failure
-        3. a. If job succeeds, delete job (and related pods)
+        3. a. If job succeeds,
            b. If pod fails, raise Exception and do not delete.
-              This will allow for easier debugging.
-              A separate process should be run to clean old dead jobs.
+        4. delete job (and related pods)
+            A separate process should be run to clean old dead jobs.
 
         :param job_name: Name of the Kubernetes job. Will be suffixed at runtime
         :type job_name: string
@@ -57,8 +56,6 @@ class KubernetesJobOperator(BaseOperator):
         :type sleep_seconds_between_polling: int
         :param cloudsql_connections: A list of CloudSQLConnection to tell cloudsql_proxy to open additional connections
         :type cloudsql_connections: list[CloudSQLConnection]
-        :param do_xcom_push: return the stdout which also get set in xcom by airflow platform
-        :type do_xcom_push: bool
         """
         super(KubernetesJobOperator, self).__init__(*args, **kwargs)
         self.job_name = job_name
@@ -94,7 +91,6 @@ class KubernetesJobOperator(BaseOperator):
         self.env['AIRFLOW_VERSION'] = airflow_version
 
         self.sleep_seconds_between_polling = sleep_seconds_between_polling
-        self.do_xcom_push = do_xcom_push
 
         # TODO: dangermike (2018-05-22) get this from... somewhere else
         self.cloudsql_instance_creds = 'airflow-cloudsql-instance-credentials'
@@ -108,7 +104,6 @@ class KubernetesJobOperator(BaseOperator):
     def from_job_yaml(job_yaml_string,
                       service_account_secret_name=None,
                       sleep_seconds_between_polling=60,
-                      clean_up_successful_jobs=True,
                       *args,
                       **kwargs
                       ):
@@ -123,10 +118,6 @@ class KubernetesJobOperator(BaseOperator):
         :param sleep_seconds_between_polling: number of seconds to sleep between polling
             for job completion, defaults to 60
         :type sleep_seconds_between_polling: int
-        :param clean_up_successful_jobs: Flag to indicate whether or not successful jobs
-            and related pods should be deleted after completion. (Failed jobs and pods
-            are currently never deleted, they will have to be deleted manually.)
-        :type clean_up_successful_jobs: boolean
         :return: KubernetesJobOperator instance
         """
         job_data = yaml.safe_load(job_yaml_string)
@@ -459,24 +450,10 @@ class KubernetesJobOperator(BaseOperator):
         # if polling fails and self.polling_job_completion is not able to return pod_output.
         pod_output = None
 
-        success = False
         try:
             pod_output = self.poll_job_completion(job_name)
             pod_output = pod_output or self.get_pods(job_name)  # if we didn't get it for some reason
-            success = True
-
-            # returning output if do_xcom_push is set
-            # TODO: [2018-05-09 dangermike] remove this once next_best is no longer using it
-            retval = None
-            if self.do_xcom_push:
-                for pod in pod_output['items']:
-                    pod_name = pod['metadata']['name']
-                    for container in pod['spec']['containers']:
-                        container_name = container['name']
-                        if container_name != 'cloudsql-proxy':  # hack
-                            retval = subprocess.check_output(args=[
-                                'kubectl', 'logs', pod_name, container_name])
-            return retval
+            return None
         finally:
             try:
                 # don't consider the job failed if this fails!
@@ -484,5 +461,4 @@ class KubernetesJobOperator(BaseOperator):
             except Exception as ex:
                 logging.error("Failed to process container logs: %s" % ex.message, extra={'err': ex})
 
-            if success:
-                self.clean_up(job_name)
+            self.clean_up(job_name)
