@@ -254,6 +254,8 @@ class KubernetesJobOperator(BaseOperator):
                 # If there are no pods left running anything, we are done here. Cleaning up
                 # dependent containers will be left to the top-level `finally` block down below.
                 has_live = False
+                total_pods = len(pod_output['items'])
+                logging.info("total pods: {total_pods}".format(total_pods=total_pods))
                 for pod in pod_output['items']:
                     if 'Unknown' == pod['status']['phase']:
                         # we haven't run yet
@@ -291,6 +293,9 @@ class KubernetesJobOperator(BaseOperator):
 
                 # we have no live pods. end the job and return ok
                 if not has_live:
+                    if total_pods > 1:
+                        time.sleep(10)
+                        self.poll_job_completion(job_name)
                     logging.info('No live, independent pods left. Exiting poll loop.')
                     return pod_output
         finally:
