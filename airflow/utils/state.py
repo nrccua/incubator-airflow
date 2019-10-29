@@ -16,6 +16,10 @@ from __future__ import unicode_literals
 
 from builtins import object
 
+class SchedulerStates(object):
+    RUNNING = "RUNNING"
+    PAUSING = "PAUSING"
+    IDLE = "IDLE"
 
 class State(object):
     """

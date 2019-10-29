@@ -28,6 +28,7 @@ import socket
 import sys
 import threading
 import time
+import json
 from collections import defaultdict
 from datetime import datetime
 from past.builtins import basestring
@@ -42,7 +43,7 @@ from airflow import configuration as conf
 from airflow import executors, models, settings
 from airflow.exceptions import AirflowException
 from airflow.logging_config import configure_logging
-from airflow.models import DAG, DagRun
+from airflow.models import DAG, DagRun, SchedulerState
 from airflow.settings import Stats
 from airflow.task_runner import get_task_runner
 from airflow.ti_deps.dep_context import DepContext, QUEUE_DEPS, RUN_DEPS
@@ -56,7 +57,7 @@ from airflow.utils.db import (
     create_session, provide_session, pessimistic_connection_handling)
 from airflow.utils.email import send_email
 from airflow.utils.log.logging_mixin import LoggingMixin, StreamLogWriter
-from airflow.utils.state import State
+from airflow.utils.state import State, SchedulerStates
 
 Base = models.Base
 ID_LEN = models.ID_LEN
@@ -1178,7 +1179,7 @@ class SchedulerJob(BaseJob):
         task_instance_str = "\n\t".join(
             ["{}".format(x) for x in executable_tis])
         self.log.info("Setting the follow tasks to queued state:\n\t%s", task_instance_str)
-        # so these dont expire on commit
+        # so these don't expire on commit
         for ti in executable_tis:
             copy_dag_id = ti.dag_id
             copy_execution_date = ti.execution_date
@@ -1375,6 +1376,7 @@ class SchedulerJob(BaseJob):
         :type tis_out: multiprocessing.Queue[TaskInstance]
         :return: None
         """
+
         for dag in dags:
             dag = dagbag.get_dag(dag.dag_id)
             if dag.is_paused:
@@ -1507,6 +1509,12 @@ class SchedulerJob(BaseJob):
 
     def _execute(self):
         self.log.info("Starting the scheduler")
+
+        # Set scheduler state to running when the scheduler starts up.  This will allow the scheduler to schedule
+        # operators.
+        scheduler_state = SchedulerState()
+        scheduler_state.set_state(SchedulerStates.RUNNING)
+
         pessimistic_connection_handling()
 
         # DAGs can be pickled for easier remote execution by some executors
@@ -1529,6 +1537,7 @@ class SchedulerJob(BaseJob):
         self.log.info("Searching for files in %s", self.subdir)
         known_file_paths = list_py_file_paths(self.subdir)
         self.log.info("There are %s files in %s", len(known_file_paths), self.subdir)
+        # TODO set scheduler state to RUNNING here.
 
         def processor_factory(file_path):
             return DagFileProcessor(file_path,
@@ -1601,6 +1610,7 @@ class SchedulerJob(BaseJob):
         # Use this value initially
         known_file_paths = processor_manager.file_paths
 
+        first_run = True
         # For the execute duration, parse and schedule DAGs
         while (datetime.utcnow() - execute_start_time).total_seconds() < \
                 self.run_duration or self.run_duration < 0:
@@ -1625,7 +1635,9 @@ class SchedulerJob(BaseJob):
 
             # Kick of new processes and collect results from finished ones
             self.log.info("Heartbeating the process manager")
-            simple_dags = processor_manager.heartbeat()
+            simple_dags = processor_manager.heartbeat(first_run)
+            if first_run:
+                first_run = False
 
             if self.using_sqlite:
                 # For the sqlite case w/ 1 thread, wait until the processor
@@ -1655,8 +1667,23 @@ class SchedulerJob(BaseJob):
                                                            State.SCHEDULED],
                                                           State.NONE)
 
-                self._execute_task_instances(simple_dag_bag,
-                                             (State.SCHEDULED,))
+                scheduler_state = SchedulerState().get_state()
+                self.log.info("BENDAWG scheduler state is {}".format(scheduler_state))
+
+                # Only start new operators if scheduler is in state running.
+                if scheduler_state == SchedulerStates.RUNNING:
+                    self.log.info("BENDAWG since we're in state running I'm doing my normal thing ya dig.")
+                    self._execute_task_instances(simple_dag_bag,
+                                                     (State.SCHEDULED,))
+                # Only check to see if we can redeploy if scheduler is in state pausing.
+                elif scheduler_state == SchedulerStates.PAUSING:
+                    self.log.info("BENDAWG yo we're pausing so Imma check if shiznit is running.")
+                    if self._airflow_ready_for_redeploy():
+                        self.log.info("BENDAWG oh snap dood we can totally redeploy now.")
+                        # Only set scheduler to state idle if we're ready to redeploy.
+                        SchedulerState().set_state(SchedulerStates.IDLE)
+                    else:
+                        self.log.info("BENDAWG sorry broheim, we're still running stuff.")
 
             # Call heartbeats
             self.log.info("Heartbeating the executor")
@@ -1712,6 +1739,26 @@ class SchedulerJob(BaseJob):
         self.executor.end()
 
         settings.Session.remove()
+
+    @provide_session
+    def _airflow_ready_for_redeploy(self, session=None):
+        TI = models.TaskInstance
+        # We are not ready to redeploy if there are any runnable tasks that,
+        tis = session.query(TI).filter(
+            or_(
+                TI.state == State.UP_FOR_RETRY,
+                TI.state == State.QUEUED,
+                TI.state == State.RUNNING
+            )
+        ).all()
+        for ti in tis:
+            self.log.info("BENDAWG TASK task id is {} and state is {} and operator is {}.".format(ti.task_id, ti.state, ti.operator))
+            # are not resumable post-deploy.
+            if ti.state in [State.RUNNING, State.QUEUED, State.UP_FOR_RETRY] and ti.operator not in ["KubernetesJobOperator", "AppEngineOperatorAsync"]:
+                self.log.info("BENDAWG TASK totally not radical man - keeping the status quo")
+                return False
+        self.log.info("BENDAWG my dude, we are totally clean")
+        return True
 
     @provide_session
     def process_file(self, file_path, pickle_dags=False, session=None):
@@ -2493,6 +2540,9 @@ class LocalTaskJob(BaseJob):
             self.on_kill()
             raise AirflowException("LocalTaskJob received SIGTERM signal")
         signal.signal(signal.SIGTERM, signal_handler)
+        self.log.info("BENLOG MAN")
+        self.log.info(str(self.state))
+        self.log.info(str(self.task_instance.state))
 
         if not self.task_instance._check_and_change_state_before_execution(
                 mark_success=self.mark_success,
@@ -2502,7 +2552,10 @@ class LocalTaskJob(BaseJob):
                 ignore_ti_state=self.ignore_ti_state,
                 job_id=self.id,
                 pool=self.pool):
-            self.log.info("Task is not able to be run")
+            self.log.info("Task is not able to be run dude")
+            self.log.info("BENLOG POST")
+            self.log.info(str(self.state))
+            self.log.info(str(self.task_instance.state))
             return
 
         try:

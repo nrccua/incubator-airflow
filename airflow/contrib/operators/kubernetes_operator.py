@@ -1,5 +1,5 @@
 from airflow import configuration
-from airflow.models import BaseOperator
+from airflow.models import BaseOperator, TaskInstance
 from airflow.version import version as airflow_version
 from airflow.contrib.utils.kubernetes_utils import dict_to_env, uniquify_job_name, deuniquify_job_name, \
     KubernetesSecretParameter
@@ -155,10 +155,12 @@ class KubernetesJobOperator(BaseOperator):
         """
         Deletes the job. Deleting the job deletes are related pods.
         """
+        logging.info("KILLING job {}".format(str(job_name)))
         result = retryable_check_output(args=[
             'kubectl',
+            '--namespace',
+            'airflow-{}'.format(configuration.get('core', 'environment_suffix')),
             'delete',
-            '--grace-period=120',  # after 120 secs, stop waiting
             '--ignore-not-found=true',  # in case we hit an edge case on retry
             'job',
             job_name
@@ -179,7 +181,7 @@ class KubernetesJobOperator(BaseOperator):
 
     def get_pods(self, job_name):
         return json.loads(retryable_check_output(args=[
-            'kubectl', 'get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]))
+            'kubectl', '--namespace', 'airflow-{}'.format(configuration.get('core', 'environment_suffix')), 'get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]))
 
     def log_container_logs(self, job_name, pod_output=None):
         """
@@ -199,7 +201,7 @@ class KubernetesJobOperator(BaseOperator):
                 extra = dict(pod=pod_name, container=container_name)
                 logging.info('LOGGING OUTPUT FROM JOB [%s/%s]:' % (pod_name, container_name), extra=extra)
                 output = retryable_check_output(
-                    args=['kubectl', 'logs', pod_name, container_name])
+                    args=['kubectl', '--namespace', 'airflow-{}'.format(configuration.get('core', 'environment_suffix')), 'logs', pod_name, container_name])
                 for line in output.splitlines():
                     logging.info(line, extra=extra)
 
@@ -219,7 +221,7 @@ class KubernetesJobOperator(BaseOperator):
                 pod_output = self.get_pods(job_name)
 
                 job_description = json.loads(retryable_check_output(
-                    ['kubectl', 'get', 'job', "-o", "json", job_name])
+                    ['kubectl', '--namespace', 'airflow-{}'.format(configuration.get('core', 'environment_suffix')), 'get', 'job', "-o", "json", job_name])
                 )
 
                 status_block = job_description['status']
@@ -309,7 +311,7 @@ class KubernetesJobOperator(BaseOperator):
                             logging.info('killing dependent live container %s' % cname)
                             # there is a race condition between reading the status and trying to kill the running
                             # container. ignore the return code to duck the issue.
-                            subprocess.call(['kubectl', 'exec', pod['metadata']['name'], '-c', cname, 'kill', '1'])
+                            subprocess.call(['kubectl', '--namespace', 'airflow-{}'.format(configuration.get('core', 'environment_suffix')), 'exec', pod['metadata']['name'], '-c', cname, 'kill', '1'])
 
     def create_job_yaml(self, context):
         """
@@ -419,7 +421,10 @@ class KubernetesJobOperator(BaseOperator):
         kub_job_dict = {
             'apiVersion': 'batch/v1',
             'kind': 'Job',
-            'metadata': {'name': unique_job_name},
+            'metadata': {
+                'name': unique_job_name,
+                'namespace': 'airflow-{}'.format(configuration.get('core', 'environment_suffix'))
+            },
             'spec': {
                 'template': {
                     'spec': {
@@ -435,6 +440,7 @@ class KubernetesJobOperator(BaseOperator):
         return unique_job_name, yaml.safe_dump(kub_job_dict)
 
     def execute(self, context):
+        logging.info("Try number is {}".format(TaskInstance(self, context['execution_date']).try_number))
         job_name, job_yaml_string = self.create_job_yaml(context)
         logging.info(job_yaml_string)
         self.instance_names.append(job_name)  # should happen once, but safety first!
@@ -443,7 +449,7 @@ class KubernetesJobOperator(BaseOperator):
         with tempfile.NamedTemporaryFile(suffix='.yaml') as f:
             f.write(job_yaml_string)
             f.flush()
-            result = subprocess.check_output(args=['kubectl', 'apply', '-f', f.name])
+            result = subprocess.check_output(args=['kubectl', '--namespace', 'airflow-{}'.format(configuration.get('core', 'environment_suffix')), 'apply', '-f', f.name])
             logging.info(result)
 
         # Setting pod_output to None, this will prevent a log_container_logs error

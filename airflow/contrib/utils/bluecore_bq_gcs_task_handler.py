@@ -14,9 +14,11 @@ from google.cloud import bigquery
 from google.cloud.exceptions import BadRequest
 import os
 from airflow.utils.log.gcs_task_handler import GCSTaskHandler
+from airflow.utils.log.file_task_handler import FileTaskHandler
 from airflow import configuration
 from datetime import datetime
 import string
+import traceback
 from airflow.contrib.utils.kubernetes_utils import retryable_check_output
 
 try:
@@ -95,6 +97,17 @@ class BQGCSTaskHandler(GCSTaskHandler):
                     bq_table_name = "{}.gke_logs.{}_*".format(data_project_name, container_name)
                     tables.append((bq_table_name, pod_id))
 
+            if not tables:
+                message = "No pods were found running for this task, and the task's output has not been written to " \
+                          "GCS.  If refreshing this page doesn't present a log, it's possible that this task failed " \
+                          "to spawn a kubernetes job.\n\n"
+                message += json.dumps(tables) + "\n\n"
+                try:
+                    message += FileTaskHandler._read(self, ti, try_number)
+                except:
+                    message += "Failed to read airflow worker log!  Stack trace:\n{}".format(traceback.format_exc())
+                return message
+
             query = ("\n UNION ALL \n ".join(
                 [BQGCSTaskHandler.generate_query(bq_table_name=bq_table_name, pod_id=pod_id, start_date=start_date,
                                                  end_date=end_date)
@@ -163,7 +176,7 @@ class BQGCSTaskHandler(GCSTaskHandler):
 
         """
         return json.loads(retryable_check_output(args=[
-            'kubectl', 'get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]))
+            'kubectl', '--namespace', 'airflow-{}'.format(configuration.get('core', 'environment_suffix')), 'get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]))
 
     @staticmethod
     def generate_query(bq_table_name, pod_id, start_date, end_date):
