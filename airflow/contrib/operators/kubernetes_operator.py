@@ -288,11 +288,15 @@ class KubernetesJobOperator(BaseOperator):
                         if live_cnt > 0:
                             has_live = True
                             break
+                total_pods = len(pod_output['items'])
+                logging.info("total pods: {total_pods}".format(total_pods=total_pods))
+                # if we get to this point but for some reason there are no pods, log it and retry
+                if total_pods == 0:
+                    logging.info('No pods were found. Retrying.')
+                # we have no live pods. log, and continue the loop
+                elif not has_live:
+                    logging.info('No live, independent pods left. Retrying.')
 
-                # we have no live pods. end the job and return ok
-                if not has_live:
-                    logging.info('No live, independent pods left. Exiting poll loop.')
-                    return pod_output
         finally:
             if pod_output:
                 # let's clean up all our old pods. we'll kill the entry point (PID 1) in each running container
