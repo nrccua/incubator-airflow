@@ -280,6 +280,7 @@ class KubernetesJobOperator(BaseOperator):
                             if cs['name'] in dependent_containers:
                                 pass
                             elif 'terminated' in cs['state']:
+                                has_live_existed = True
                                 exit_code = int(cs['state']['terminated'].get('exitCode', 0))
                                 if exit_code > 0:
                                     raise Exception('%s has failed pods, failing task.' % job_name)
