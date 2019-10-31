@@ -213,6 +213,7 @@ class KubernetesJobOperator(BaseOperator):
         pod_output = None  # keeping this out here so we can reuse it in the "finally" clause
 
         try:
+            has_live_existed = False
             while True:
                 time.sleep(self.sleep_seconds_between_polling)
 
@@ -290,13 +291,14 @@ class KubernetesJobOperator(BaseOperator):
                             break
                 total_pods = len(pod_output['items'])
                 logging.info("total pods: {total_pods}".format(total_pods=total_pods))
+                has_live_existed = has_live_existed or has_live
                 # if we get to this point but for some reason there are no pods, log it and retry
-                if total_pods == 0:
-                    logging.info('No pods were found. Retrying.')
-                # we have no live pods. log, and continue the loop
+                if not has_live_existed:
+                    logging.info('No pods have run. Retrying.')
+                # we have no live pods, but live pods have existed.
                 elif not has_live:
-                    logging.info('No live, independent pods left. Retrying.')
-
+                    logging.info('No live, independent pods left.')
+                    return pod_output
         finally:
             if pod_output:
                 # let's clean up all our old pods. we'll kill the entry point (PID 1) in each running container
