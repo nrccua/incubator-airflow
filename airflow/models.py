@@ -362,6 +362,10 @@ class DagBag(BaseDagBag, LoggingMixin):
                 if ti.task_id in dag.task_ids:
                     task = dag.get_task(ti.task_id)
                     ti.task = task
+                    if ti.operator == "KubernetesJobOperator":
+                        from airflow.contrib.utils.kubernetes_utils import uniquify_job_name
+                        task.clean_up(uniquify_job_name(task, {'execution_date': ti.execution_date}))
+
                     ti.handle_failure("{} killed as zombie".format(str(ti)))
                     self.log.info('Marked zombie job %s as failed', ti)
                     Stats.incr(
@@ -747,6 +751,71 @@ class DagPickle(Base):
             dag.template_env = None
         self.pickle_hash = hash(dag)
         self.pickle = dag
+
+class SchedulerState(Base, LoggingMixin):
+    """
+    scheduler_state stores the state of the scheduler. When state is RUNNING, all operators
+    are free to launch.  When state is PAUSING, no new operators are scheduled.  When state
+    is IDLE, only externally-running tasks are still active, meaning airflow can safely be
+    redeployed.
+    """
+
+    __tablename__ = "scheduler_state"
+
+    state = Column(String(50), primary_key=True)
+
+    __table_args__ = (
+        Index('state', state, state),
+    )
+
+    def __init__(self):
+
+        self._log = logging.getLogger("airflow.scheduler_state")
+
+    @provide_session
+    def get_state(self, session=None):
+        """
+        Get the current scheduler state
+        """
+
+        if session is None:
+            raise Exception("Session is none - cannot get state!")
+
+        SS = SchedulerState
+        ss = session.query(SS).all()
+        if len(ss) > 1:
+            raise Exception("Found multiple rows for scheduler_state - this should never happen!")
+
+        if len(ss) == 0:
+            self.state = "RUNNING"
+            session.merge(self)
+            session.commit()
+        else:
+            return ss[0].state
+
+    @provide_session
+    def set_state(self, state, session=None):
+        """
+        Set the current scheduler state
+        """
+
+        if session is None:
+            raise Exception("Session is none - cannot set state!")
+
+        SS = SchedulerState
+        ss = session.query(SS).all()
+        if len(ss) > 1:
+            raise Exception("Found multiple rows for scheduler_state - this should never happen!")
+
+        if len(ss) == 0:
+            self.state = state
+            session.merge(self)
+            session.commit()
+        else:
+            ss[0].state = state
+            session.commit()
+
+        return self.get_state()
 
 
 class TaskInstance(Base, LoggingMixin):
@@ -1383,7 +1452,7 @@ class TaskInstance(Base, LoggingMixin):
 
         # Another worker might have started running this task instance while
         # the current worker process was blocked on refresh_from_db
-        if self.state == State.RUNNING:
+        if self.state == State.RUNNING and (self.operator not in ["KubernetesJobOperator", "AppEngineOperatorAsync"]):
             msg = "Task Instance already running {}".format(self)
             self.log.warning(msg)
             session.commit()
@@ -1457,6 +1526,9 @@ class TaskInstance(Base, LoggingMixin):
                     task_copy.on_kill()
                     raise AirflowException("Task received SIGTERM signal")
                 signal.signal(signal.SIGTERM, signal_handler)
+
+                # Give operators a chance to save xcom data from previous runs.
+                task_copy.save_previous_xcoms(context=context)
 
                 # Don't clear Xcom until the task is certain to execute
                 self.clear_xcom_data()
@@ -2420,6 +2492,13 @@ class BaseOperator(LoggingMixin):
             for t in self.get_flat_relatives(upstream=False)
         ]) + self.priority_weight
 
+    def save_previous_xcoms(self, context):
+        """
+        This hook is triggered right before xcom data is cleared.  This is useful for Operators that need to adopt
+        orphaned external resources.
+        """
+        pass
+
     def pre_execute(self, context):
         """
         This hook is triggered right before self.execute() is called.
@@ -2648,7 +2727,6 @@ class BaseOperator(LoggingMixin):
         """
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date or datetime.utcnow()
-
         for dt in self.dag.date_range(start_date, end_date=end_date):
             TaskInstance(self, dt).run(
                 mark_success=mark_success,

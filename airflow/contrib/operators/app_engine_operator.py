@@ -3,11 +3,12 @@ from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 from airflow.contrib.utils.parameters import evaluate_xcoms
 from airflow.exceptions import AirflowException, AirflowTaskTimeout, AirflowConfigException
 from airflow.hooks.http_hook import HttpHook
-from airflow.models import BaseOperator, XCOM_RETURN_KEY
+from airflow.models import BaseOperator, XCOM_RETURN_KEY, TaskInstance
 from airflow.utils.decorators import apply_defaults
 from airflow.contrib.utils.kubernetes_utils import uniquify_job_name
 from airflow.contrib.utils.xcom import try_xcom_pull
 from datetime import datetime
+
 try:
     import ujson as json
 except ImportError:
@@ -58,7 +59,7 @@ class AppEngineOperator(BaseOperator):
         i = 0
         # Bluecore App Engine backend instances timeout after an hour
         while (datetime.utcnow() - start_time).total_seconds() < 3600:
-            time.sleep(min(60, 5 * 2**i))
+            time.sleep(min(60, 5 * 2 ** i))
             i += 1
             if check_gcs_file_exists(success_file_name, self.google_cloud_conn_id, self.bucket):
                 return
@@ -210,8 +211,60 @@ class AppEngineOperatorAsync(BaseOperator):
         self.command_name = command_name
         self.command_params = command_params
         self.appengine_queue = appengine_queue
+        self.should_adopt = False
+        self.finished = False
+        self.return_value = None
+        self.exc_message = None
+        self.exc_type = None
+        self.exc_callstack = None
+
+    def retrieve_exception_details(self, context):
+        self.exc_message = self.safe_xcom_pull(
+            context=context,
+            task_ids=self.task_id,
+            key='__EXCEPTION_MESSAGE'
+        )
+
+        self.exc_type = self.safe_xcom_pull(
+            context=context,
+            task_ids=self.task_id,
+            key='__EXCEPTION_TYPE'
+        )
+
+        self.exc_callstack = self.safe_xcom_pull(
+            context=context,
+            task_ids=self.task_id,
+            key='__EXCEPTION_CALLSTACK'
+        )
+
+    def save_previous_xcoms(self, context):
+        pending_tuple = try_xcom_pull(
+            context=context,
+            task_ids=self.task_id,
+            key='is_pending_{}'.format(TaskInstance(self, context['execution_date']).try_number)
+        )
+        if pending_tuple[0]:
+            self.should_adopt = True
+
+        return_value_tuple = try_xcom_pull(
+            context=context,
+            task_ids=self.task_id
+        )
+        if return_value_tuple[0]:
+            self.finished = True
+            self.return_value = return_value_tuple[1]
+            if self.return_value == '__EXCEPTION__':
+                self.retrieve_exception_details(context)
 
     def schedule_job(self, context):
+        try_number = TaskInstance(self, context['execution_date']).try_number
+
+        if self.should_adopt:
+            logging.info("Job is already scheduled - skipping to polling phase.")
+            return
+
+        logging.info("Job was not already scheduled - executing schedule phase.")
+
         hook = HttpHook(
             method='POST',
             http_conn_id=self.http_conn_id)
@@ -244,13 +297,17 @@ class AppEngineOperatorAsync(BaseOperator):
 
         instance_params = evaluate_xcoms(self.command_params, self, context)
 
-        post_data = {'params_dict': instance_params, 'appengine_queue': self.appengine_queue, 'job_id': job_id}
+        post_data = {'params_dict': instance_params, 'appengine_queue': self.appengine_queue, 'job_id': job_id,
+                     'try_number': try_number}
 
-        hook.run(
-            endpoint='/api/airflow_v2/async/%s' % self.command_name,
-            headers=headers,
-            data=json.dumps(post_data),
-            extra_options=None)
+        logging.info("Monolith responded with: {}".format(str(
+            hook.run(
+                endpoint='/api/airflow_v2/async/%s' % self.command_name,
+                headers=headers,
+                data=json.dumps(post_data),
+                extra_options=None
+            ).text
+        )))
 
     def safe_xcom_pull(self, context, task_ids, dag_id=None, key=XCOM_RETURN_KEY, include_prior_dates=None):
         """
@@ -273,65 +330,61 @@ class AppEngineOperatorAsync(BaseOperator):
             return None
 
     def poll_status(self, context):
-        start_time = datetime.utcnow()
-        i = 0
 
-        # Bluecore App Engine backend instances timeout after an hour
-        while True:
-            remaining_secs = self.appengine_timeout - (datetime.utcnow() - start_time).total_seconds()
-            logging.info("%0.2f seconds remain until timeout" % remaining_secs)
-            if remaining_secs <= 0:
-                raise AirflowTaskTimeout()
+        retval = None
 
-            # try_xcom_pull allows us to distinguish between cases where the task
-            # hasn't pushed an XCom and where the task pushed an XCom with value None.
-            retval_tuple = try_xcom_pull(context=context, task_ids=self.task_id)
-            # if XCom not yet pushed
+        if self.finished:
+            logging.info("Job is already finished - skipping to result phase.")
+            retval = self.return_value
+        else:
+            logging.info("Job is not finished - executing poll phase.")
+            start_time = datetime.utcnow()
+            i = 0
+            # Bluecore App Engine backend instances timeout after an hour
+            while retval is None:
+                remaining_secs = self.appengine_timeout - (datetime.utcnow() - start_time).total_seconds()
+                logging.info("%0.2f seconds remain until timeout" % remaining_secs)
+                if remaining_secs <= 0:
+                    raise AirflowTaskTimeout()
 
-            if not retval_tuple[0]:
-                logging.info("XCom response not found. Sleeping.")
-                # sleep for a while and try again
-                time.sleep(min(60, 2**i))
-                i += 1
-                continue
-            retval = retval_tuple[1]
-            logging.info("XCom response received: %s" % str(retval))
-            if retval == '__EXCEPTION__':
-                exc_message = self.safe_xcom_pull(
-                    context=context,
-                    task_ids=self.task_id,
-                    key='__EXCEPTION_MESSAGE'
-                )
+                # try_xcom_pull allows us to distinguish between cases where the task
+                # hasn't pushed an XCom and where the task pushed an XCom with value None.
+                retval_tuple = try_xcom_pull(context=context, task_ids=self.task_id)
+                # if XCom not yet pushed
+                if not retval_tuple[0]:
+                    logging.info("XCom response not found. Sleeping.")
+                    # sleep for a while and try again
+                    time.sleep(min(60, 2**i))
+                    i += 1
+                    continue
+                logging.info("XCom response received: %s" % str(retval))
+                retval = retval_tuple[1]
 
-                exc_type = self.safe_xcom_pull(
-                    context=context,
-                    task_ids=self.task_id,
-                    key='__EXCEPTION_TYPE'
-                )
+                if retval == '__EXCEPTION__':
+                    self.retrieve_exception_details(context)
+                break
 
-                exc_callstack = self.safe_xcom_pull(
-                    context=context,
-                    task_ids=self.task_id,
-                    key='__EXCEPTION_CALLSTACK'
-                )
+        logging.info("Executing result phase.")
+        if retval == '__EXCEPTION__':
+            logging.error(
+                "Found exception %s: %s" %
+                (self.exc_type or '<UNKNOWN>', self.exc_message or '<UNKNOWN>')
+            )
 
-                logging.error(
-                    "Found exception %s: %s" %
-                    (exc_type or '<UNKNOWN>', exc_message or '<UNKNOWN>')
-                )
+            if self.exc_callstack:
+                logging.error(str(self.exc_callstack))
 
-                if exc_callstack:
-                    logging.error(str(exc_callstack))
+            raise AirflowException(self.exc_message)
 
-                raise AirflowException(exc_message)
-            return
+        logging.info("Remote task finished successfully.")
+        return
 
     def execute(self, context):
+        # TODO I think we can delete this comment - it doesn't appear to reference anything anymore.
         # It seems that when an operator returns, it is considered successful,
         # and an operator fails if and only if it raises an AirflowException.
         # Good luck finding documentation saying that though.
         self.schedule_job(context)
-        logging.info("Job scheduled")
         try:
             self.poll_status(context)
         except:
