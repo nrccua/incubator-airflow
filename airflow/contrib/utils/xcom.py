@@ -97,7 +97,6 @@ def try_xcom_pull(
         are returned as well.
     :type include_prior_dates: bool
     """
-
     if dag_id is None:
         dag_id = context['ti'].dag_id
 

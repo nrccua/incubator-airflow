@@ -69,6 +69,8 @@ log = LoggingMixin().log
 
 
 def sigint_handler(sig, frame):
+    subprocess.check_output("echo stopping > /usr/local/airflow/actiondude", shell=True)
+    time.sleep(30)
     sys.exit(0)
 
 
@@ -362,6 +364,11 @@ def run(args, dag=None):
     task = dag.get_task(task_id=args.task_id)
     ti = TaskInstance(task, args.execution_date)
     ti.refresh_from_db()
+    if ti.current_state() == "failed":
+        # This behavior is always correct (failed tasks should not run), but is implemented to specifically handle the
+        # case where a worker goes down, the celery task gets re-queued, and the scheduler kills the airflow task
+        # without knowing to revoke the task from the celery queue.
+        return
 
     log = logging.getLogger('airflow.task')
     if args.raw:
@@ -855,6 +862,7 @@ def serve_logs(args):
 
 
 def worker(args):
+    subprocess.check_output("echo booting > /usr/local/airflow/bootingdude", shell=True)
     env = os.environ.copy()
     env['AIRFLOW_HOME'] = settings.AIRFLOW_HOME
 
@@ -866,6 +874,7 @@ def worker(args):
     options = {
         'optimization': 'fair',
         'O': 'fair',
+        'loglevel': 'DEBUG',
         'queues': args.queues,
         'concurrency': args.concurrency,
         'hostname': args.celery_hostname,
@@ -891,13 +900,54 @@ def worker(args):
         stdout.close()
         stderr.close()
     else:
-        signal.signal(signal.SIGINT, sigint_handler)
-        signal.signal(signal.SIGTERM, sigint_handler)
+        subprocess.check_output("echo running > /usr/local/airflow/modedude", shell=True)
+        serve_logs_proc = subprocess.Popen(['airflow', 'serve_logs'], env=env)
+        celery_proc = subprocess.Popen(
+            [
+                'celery',
+                'worker',
+                '-A', 'airflow.executors.celery_executor',
+                '-O', 'fair',
+                '-Q', str(args.queues),
+                '-c', str(args.concurrency)
+            ],
+            env=env,
+            # don't inherit stdin, so that Ctrl-C is not handled twice
+            stdin=subprocess.PIPE
+        )
 
-        sp = subprocess.Popen(['airflow', 'serve_logs'], env=env)
+        def kill_proc(dummy_signum, dummy_frame):
+            subprocess.check_output("echo warmkilling > /usr/local/airflow/noicedude", shell=True)
+            serve_logs_proc.terminate()
 
-        worker.run(**options)
-        sp.kill()
+            # 1. Celery responsd to SIGTERM with warm shutdown quit when all
+            #    tasks finish
+            logging.debug('Sending SIGTERM to Celery')
+            celery_proc.terminate()
+
+            # 2. Send SIGTERM to each celery worker.  This will trigger task re-queueing.
+            #
+            # - celery master process
+            #   \- celery worker process <------- terminate
+            #      \- airflow run
+            #   \- celery worker process <------- terminate
+            #      \- airflow run
+            celery_workers = psutil.Process(celery_proc.pid).children()
+            for celery_worker in celery_workers:
+                logging.debug('sending SIGTERM to ', celery_worker.cmdline()[0])
+                celery_worker.send_signal(signal.SIGKILL)
+
+            # 3. Wait for warm shutdown to finish
+            celery_proc.wait()
+
+            # time.sleep(60)
+            # sys.exit(0)
+
+        signal.signal(signal.SIGINT, kill_proc)
+        signal.signal(signal.SIGTERM, kill_proc)
+
+        while True:
+            pass
 
 
 def initdb(args):  # noqa
@@ -1600,7 +1650,7 @@ class CLIFactory(object):
                      'log_file'),
         }, {
             'func': worker,
-            'help': "Start a Celery worker node",
+            'help': "Supervise or daemonize a Celery worker node",
             'args': ('do_pickle', 'queues', 'concurrency', 'celery_hostname',
                      'pid', 'daemon', 'stdout', 'stderr', 'log_file'),
         }, {

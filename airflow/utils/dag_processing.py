@@ -448,7 +448,7 @@ class DagFileProcessorManager(LoggingMixin):
             while not processor.done:
                 time.sleep(0.1)
 
-    def heartbeat(self):
+    def heartbeat(self, first_run):
         """
         This should be periodically called by the scheduler. This method will
         kick of new processes to process DAG definition files and read the
