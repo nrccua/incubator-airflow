@@ -257,7 +257,9 @@ class AppEngineOperatorAsync(BaseOperator):
                 self.retrieve_exception_details(context)
 
     def schedule_job(self, context):
-        try_number = TaskInstance(self, context['execution_date']).try_number
+        current_task_instance = TaskInstance(self, context['execution_date'])
+        current_task_instance.refresh_from_db()
+        try_number = current_task_instance.try_number
 
         if self.should_adopt:
             logging.info("Job is already scheduled - skipping to polling phase.")

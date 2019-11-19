@@ -1088,7 +1088,7 @@ class TaskInstance(Base, LoggingMixin):
         session.commit()
 
     @provide_session
-    def refresh_from_db(self, session=None, lock_for_update=False):
+    def refresh_from_db(self, session=None, lock_for_update=False, include_queue_time=False):
         """
         Refreshes the task instance from the database based on the primary key
 
@@ -1115,6 +1115,8 @@ class TaskInstance(Base, LoggingMixin):
             self.max_tries = ti.max_tries
             self.hostname = ti.hostname
             self.pid = ti.pid
+            if include_queue_time:
+                self.queued_dttm = ti.queued_dttm
         else:
             self.state = None
 
