@@ -473,20 +473,14 @@ class KubernetesJobOperator(BaseOperator):
                 TI.state.in_([State.RUNNING, State.UP_FOR_RETRY, State.QUEUED]),
             ).all()
 
-            logging.info("current task instance {} {} {}".format(str(current_task_instance.try_number), str(current_task_instance.execution_date), str(current_task_instance.queued_dttm)))
-
             should_die = False
             for task_instance in instances_that_are_running:
-                logging.info("task instance {} {} {}".format(str(task_instance.try_number), str(task_instance.execution_date), str(current_task_instance.queued_dttm)))
                 if task_instance.queued_dttm < current_task_instance.queued_dttm:
                     should_die = True
                     break
 
             if should_die:
-                logging.info("Found some previously running jobs!")
                 raise Exception("A prior execution of this task is already running!  Failing this execution.")
-            else:
-                logging.info("We're good to go skipper!")
 
         job_name, job_yaml_string = self.create_job_yaml(context)
         logging.info(job_yaml_string)
