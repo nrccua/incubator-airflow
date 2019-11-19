@@ -28,6 +28,7 @@ import socket
 import sys
 import threading
 import time
+import json
 from collections import defaultdict
 from datetime import datetime
 from past.builtins import basestring
@@ -42,7 +43,7 @@ from airflow import configuration as conf
 from airflow import executors, models, settings
 from airflow.exceptions import AirflowException
 from airflow.logging_config import configure_logging
-from airflow.models import DAG, DagRun
+from airflow.models import DAG, DagRun, SchedulerState
 from airflow.settings import Stats
 from airflow.task_runner import get_task_runner
 from airflow.ti_deps.dep_context import DepContext, QUEUE_DEPS, RUN_DEPS
@@ -56,7 +57,7 @@ from airflow.utils.db import (
     create_session, provide_session, pessimistic_connection_handling)
 from airflow.utils.email import send_email
 from airflow.utils.log.logging_mixin import LoggingMixin, StreamLogWriter
-from airflow.utils.state import State
+from airflow.utils.state import State, SchedulerStates
 
 Base = models.Base
 ID_LEN = models.ID_LEN
@@ -1178,7 +1179,7 @@ class SchedulerJob(BaseJob):
         task_instance_str = "\n\t".join(
             ["{}".format(x) for x in executable_tis])
         self.log.info("Setting the follow tasks to queued state:\n\t%s", task_instance_str)
-        # so these dont expire on commit
+        # so these don't expire on commit
         for ti in executable_tis:
             copy_dag_id = ti.dag_id
             copy_execution_date = ti.execution_date
@@ -1375,6 +1376,7 @@ class SchedulerJob(BaseJob):
         :type tis_out: multiprocessing.Queue[TaskInstance]
         :return: None
         """
+
         for dag in dags:
             dag = dagbag.get_dag(dag.dag_id)
             if dag.is_paused:
@@ -1507,6 +1509,12 @@ class SchedulerJob(BaseJob):
 
     def _execute(self):
         self.log.info("Starting the scheduler")
+
+        # Set scheduler state to running when the scheduler starts up.  This will allow the scheduler to schedule
+        # operators.
+        scheduler_state = SchedulerState()
+        scheduler_state.set_state(SchedulerStates.RUNNING)
+
         pessimistic_connection_handling()
 
         # DAGs can be pickled for easier remote execution by some executors
@@ -1655,8 +1663,17 @@ class SchedulerJob(BaseJob):
                                                            State.SCHEDULED],
                                                           State.NONE)
 
-                self._execute_task_instances(simple_dag_bag,
-                                             (State.SCHEDULED,))
+                scheduler_state = SchedulerState().get_state()
+
+                # Only start new operators if scheduler is in state running.
+                if scheduler_state == SchedulerStates.RUNNING:
+                    self._execute_task_instances(simple_dag_bag,
+                                                     (State.SCHEDULED,))
+                # Only check to see if we can redeploy if scheduler is in state pausing.
+                elif scheduler_state == SchedulerStates.PAUSING:
+                    if self._airflow_ready_for_redeploy():
+                        # Only set scheduler to state idle if we're ready to redeploy.
+                        SchedulerState().set_state(SchedulerStates.IDLE)
 
             # Call heartbeats
             self.log.info("Heartbeating the executor")
@@ -1712,6 +1729,23 @@ class SchedulerJob(BaseJob):
         self.executor.end()
 
         settings.Session.remove()
+
+    @provide_session
+    def _airflow_ready_for_redeploy(self, session=None):
+        TI = models.TaskInstance
+        # We are not ready to redeploy if there are any runnable tasks that,
+        tis = session.query(TI).filter(
+            or_(
+                TI.state == State.UP_FOR_RETRY,
+                TI.state == State.QUEUED,
+                TI.state == State.RUNNING
+            )
+        ).all()
+        for ti in tis:
+            # are not resumable post-deploy.
+            if ti.state in [State.RUNNING, State.QUEUED, State.UP_FOR_RETRY] and ti.operator not in ["KubernetesJobOperator", "AppEngineOperatorAsync"]:
+                return False
+        return True
 
     @provide_session
     def process_file(self, file_path, pickle_dags=False, session=None):
