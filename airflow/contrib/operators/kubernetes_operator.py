@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import time
 import yaml
+from airflow.utils.state import State
+from airflow.utils.db import provide_session
 from airflow.contrib.utils.kubernetes_utils import retryable_check_output
 
 
@@ -27,6 +29,7 @@ class KubernetesJobOperator(BaseOperator):
                  service_account_secret_name=None,
                  sleep_seconds_between_polling=15,
                  cloudsql_connections=None,
+                 die_if_duplicate=False,
                  *args,
                  **kwargs):
 
@@ -61,6 +64,7 @@ class KubernetesJobOperator(BaseOperator):
         self.job_name = job_name
         self.instance_names = []
         self.service_account_secret_name = service_account_secret_name
+        self.die_if_duplicate = die_if_duplicate
         if self.service_account_secret_name == '':
             self.service_account_secret_name = None
         self.container_specs = []
@@ -449,7 +453,41 @@ class KubernetesJobOperator(BaseOperator):
 
         return unique_job_name, yaml.safe_dump(kub_job_dict)
 
-    def execute(self, context):
+    @provide_session
+    def execute(self, context, session=None):
+
+        if self.die_if_duplicate:
+
+            current_task_instance = TaskInstance(self, context['execution_date'])
+            current_task_instance.refresh_from_db(include_queue_time=True)
+            TI = TaskInstance
+            session.query(TI).filter(
+                TI.dag_id == current_task_instance.dag_id,
+                TI.task_id == current_task_instance.task_id,
+            )
+            TI = TaskInstance
+
+            instances_that_are_running = session.query(TI).filter(
+                TI.dag_id == current_task_instance.dag_id,
+                TI.task_id == current_task_instance.task_id,
+                TI.state.in_([State.RUNNING, State.UP_FOR_RETRY, State.QUEUED]),
+            ).all()
+
+            logging.info("current task instance {} {} {}".format(str(current_task_instance.try_number), str(current_task_instance.execution_date), str(current_task_instance.queued_dttm)))
+
+            should_die = False
+            for task_instance in instances_that_are_running:
+                logging.info("task instance {} {} {}".format(str(task_instance.try_number), str(task_instance.execution_date), str(current_task_instance.queued_dttm)))
+                if task_instance.queued_dttm < current_task_instance.queued_dttm:
+                    should_die = True
+                    break
+
+            if should_die:
+                logging.info("Found some previously running jobs!")
+                raise Exception("A prior execution of this task is already running!  Failing this execution.")
+            else:
+                logging.info("We're good to go skipper!")
+
         job_name, job_yaml_string = self.create_job_yaml(context)
         logging.info(job_yaml_string)
         self.instance_names.append(job_name)  # should happen once, but safety first!
