@@ -1,6 +1,6 @@
 import ast
 import jinja2
-
+from airflow import configuration
 from collections import namedtuple
 from datetime import datetime
 import hashlib
@@ -137,6 +137,13 @@ class KubernetesSecretParameter(object):
     def __init__(self, secret_key_name, secret_key_key):
         self.secret_key_name = secret_key_name
         self.secret_key_key = secret_key_key
+
+def namespaced_kubectl():
+    return [
+        "kubectl",
+        "--namespace",
+        'airflow-{}'.format(configuration.get('core', 'environment_suffix')),
+    ]
 
 
 def dict_to_env(source, task_instance, context=None):
