@@ -49,7 +49,7 @@ class ValidStateDep(BaseTIDep):
                 reason="Context specified that state should be ignored.")
             return
 
-        if ti.state in self._valid_states:
+        if (ti.state in self._valid_states) or ((str(ti.operator) in ["KubernetesJobOperator", "AppEngineOperatorAsync"]) and ti.state == "running"):
             yield self._passing_status(reason="Task state {} was valid.".format(ti.state))
             return
 

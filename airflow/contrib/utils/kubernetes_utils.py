@@ -1,6 +1,6 @@
 import ast
 import jinja2
-
+from airflow import configuration
 from collections import namedtuple
 from datetime import datetime
 import hashlib
@@ -138,6 +138,13 @@ class KubernetesSecretParameter(object):
         self.secret_key_name = secret_key_name
         self.secret_key_key = secret_key_key
 
+def namespaced_kubectl():
+    return [
+        "kubectl",
+        "--namespace",
+        'airflow-{}'.format(configuration.get('core', 'environment_suffix')),
+    ]
+
 
 def dict_to_env(source, task_instance, context=None):
     """
@@ -179,37 +186,47 @@ def dict_to_env(source, task_instance, context=None):
     return retval
 
 
-def uniquify_job_name(task_instance, context, run_timestamp=None, job_name=None):
+def uniquify_job_name(task, context, job_name=None):
     """
     uniquify_job_name generates a unique name for each job based on the
     job name appended with some magic!
 
-    :param task_instance: The task for which you want a unique name.
+    :param task: The task for which you want a unique name.
     :param context: An Airflow context. Must have ['execution_date'] datetime
            member.
-    :param run_timestamp: Date/time of the run. This should be None in
-           non-testing scenarios
     :param job_name: A name that we will be uniquifying. If passing a KubernetesJobOperator instance or an
            AppEngineAsyncOperator, the job_name will be inferred.
     :return: A unique string for the task instance
     """
-    if not run_timestamp:
-        run_timestamp = datetime.utcnow()
-
     if job_name is None:
-        if hasattr(task_instance, 'job_name'):
-            job_name = task_instance.job_name
-        elif hasattr(task_instance, 'command_name'):
-            job_name = task_instance.command_name.split('.')[-1]
+        if hasattr(task, 'job_name'):
+            job_name = task.job_name
+        elif hasattr(task, 'command_name'):
+            job_name = task.command_name.split('.')[-1]
 
     return "-".join([
         job_name,
         hashlib.sha512(" ".join([
             context['execution_date'].isoformat(),
-            task_instance.dag_id,
-            task_instance.task_id,
-            run_timestamp.isoformat(),
-        ])).hexdigest()[:16],
+            task.dag_id,
+            task.task_id,
+            # To compute the probability of a hash collision (p) after retrieving a number of hashes (n) where H is the
+            # number of possible hashes, you can use:
+            #
+            # p = (n^2) / 2H
+            #
+            # https://www.ilikebigbits.com/2018_10_20_estimating_hash_collisions.html
+            #
+            # H is 16^d, where d is the number of characters in our truncated hash, so we get:
+            # p = n^2 / 2*(16^d)
+            #
+            # Let's say a job can run every hour for 100 years, making n=876,000:
+            #
+            # p = 876000^2 / 2*(16^d)
+            # for d=16, p=2.08e-8
+            # for d=32, p=1.13e-27
+            # So we are satisfied with truncating our hash to 16 characters.
+        ])).hexdigest()[:16]
     ])
 
 

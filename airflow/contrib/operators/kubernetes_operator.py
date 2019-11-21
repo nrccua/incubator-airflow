@@ -1,8 +1,8 @@
 from airflow import configuration
-from airflow.models import BaseOperator
+from airflow.models import BaseOperator, TaskInstance
 from airflow.version import version as airflow_version
 from airflow.contrib.utils.kubernetes_utils import dict_to_env, uniquify_job_name, deuniquify_job_name, \
-    KubernetesSecretParameter
+    namespaced_kubectl, KubernetesSecretParameter
 from airflow.contrib.utils.parameters import enumerate_parameters
 from datetime import datetime
 import ujson as json
@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import time
 import yaml
+from airflow.utils.state import State
+from airflow.utils.db import provide_session
 from airflow.contrib.utils.kubernetes_utils import retryable_check_output
 
 
@@ -27,6 +29,7 @@ class KubernetesJobOperator(BaseOperator):
                  service_account_secret_name=None,
                  sleep_seconds_between_polling=15,
                  cloudsql_connections=None,
+                 die_if_duplicate=False,
                  *args,
                  **kwargs):
 
@@ -61,6 +64,7 @@ class KubernetesJobOperator(BaseOperator):
         self.job_name = job_name
         self.instance_names = []
         self.service_account_secret_name = service_account_secret_name
+        self.die_if_duplicate = die_if_duplicate
         if self.service_account_secret_name == '':
             self.service_account_secret_name = None
         self.container_specs = []
@@ -155,14 +159,16 @@ class KubernetesJobOperator(BaseOperator):
         """
         Deletes the job. Deleting the job deletes are related pods.
         """
-        result = retryable_check_output(args=[
-            'kubectl',
-            'delete',
-            '--grace-period=120',  # after 120 secs, stop waiting
-            '--ignore-not-found=true',  # in case we hit an edge case on retry
-            'job',
-            job_name
-        ])
+        logging.info("KILLING job {}".format(str(job_name)))
+        try:
+            result = retryable_check_output(args=namespaced_kubectl() + [
+                'delete',
+                '--ignore-not-found=true',  # in case we hit an edge case on retry
+                'job',
+                job_name
+            ])
+        except subprocess.CalledProcessError:
+            logging.error("Failed to delete pod - it may have already been destroyed.")
         logging.info(result)
 
     def on_kill(self):
@@ -178,8 +184,8 @@ class KubernetesJobOperator(BaseOperator):
             raise Exception('Job was killed')
 
     def get_pods(self, job_name):
-        return json.loads(retryable_check_output(args=[
-            'kubectl', 'get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]))
+        return json.loads(retryable_check_output(
+            args=namespaced_kubectl() + ['get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]))
 
     def log_container_logs(self, job_name, pod_output=None):
         """
@@ -198,8 +204,7 @@ class KubernetesJobOperator(BaseOperator):
                 container_name = container['name']
                 extra = dict(pod=pod_name, container=container_name)
                 logging.info('LOGGING OUTPUT FROM JOB [%s/%s]:' % (pod_name, container_name), extra=extra)
-                output = retryable_check_output(
-                    args=['kubectl', 'logs', pod_name, container_name])
+                output = retryable_check_output(args=namespaced_kubectl() + ['logs', pod_name, container_name])
                 for line in output.splitlines():
                     logging.info(line, extra=extra)
 
@@ -219,8 +224,8 @@ class KubernetesJobOperator(BaseOperator):
 
                 pod_output = self.get_pods(job_name)
 
-                job_description = json.loads(retryable_check_output(
-                    ['kubectl', 'get', 'job', "-o", "json", job_name])
+                job_description = json.loads(
+                    retryable_check_output(namespaced_kubectl() + ['get', 'job', "-o", "json", job_name])
                 )
 
                 status_block = job_description['status']
@@ -316,7 +321,9 @@ class KubernetesJobOperator(BaseOperator):
                             logging.info('killing dependent live container %s' % cname)
                             # there is a race condition between reading the status and trying to kill the running
                             # container. ignore the return code to duck the issue.
-                            subprocess.call(['kubectl', 'exec', pod['metadata']['name'], '-c', cname, 'kill', '1'])
+                            subprocess.call(
+                                namespaced_kubectl() + ['exec', pod['metadata']['name'], '-c', cname, 'kill', '1']
+                            )
 
     def create_job_yaml(self, context):
         """
@@ -426,7 +433,10 @@ class KubernetesJobOperator(BaseOperator):
         kub_job_dict = {
             'apiVersion': 'batch/v1',
             'kind': 'Job',
-            'metadata': {'name': unique_job_name},
+            'metadata': {
+                'name': unique_job_name,
+                'namespace': 'airflow-{}'.format(configuration.get('core', 'environment_suffix'))
+            },
             'spec': {
                 'template': {
                     'spec': {
@@ -441,7 +451,30 @@ class KubernetesJobOperator(BaseOperator):
 
         return unique_job_name, yaml.safe_dump(kub_job_dict)
 
-    def execute(self, context):
+    @provide_session
+    def execute(self, context, session=None):
+
+        if self.die_if_duplicate:
+
+            current_task_instance = TaskInstance(self, context['execution_date'])
+            current_task_instance.refresh_from_db(include_queue_time=True)
+
+            TI = TaskInstance
+            instances_that_are_running = session.query(TI).filter(
+                TI.dag_id == current_task_instance.dag_id,
+                TI.task_id == current_task_instance.task_id,
+                TI.state.in_([State.RUNNING, State.UP_FOR_RETRY, State.QUEUED]),
+            ).all()
+
+            should_die = False
+            for task_instance in instances_that_are_running:
+                if task_instance.queued_dttm < current_task_instance.queued_dttm:
+                    should_die = True
+                    break
+
+            if should_die:
+                raise Exception("A prior execution of this task is already running!  Failing this execution.")
+
         job_name, job_yaml_string = self.create_job_yaml(context)
         logging.info(job_yaml_string)
         self.instance_names.append(job_name)  # should happen once, but safety first!
@@ -450,7 +483,7 @@ class KubernetesJobOperator(BaseOperator):
         with tempfile.NamedTemporaryFile(suffix='.yaml') as f:
             f.write(job_yaml_string)
             f.flush()
-            result = subprocess.check_output(args=['kubectl', 'apply', '-f', f.name])
+            result = subprocess.check_output(args=namespaced_kubectl() + ['apply', '-f', f.name])
             logging.info(result)
 
         # Setting pod_output to None, this will prevent a log_container_logs error

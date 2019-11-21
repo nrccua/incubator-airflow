@@ -362,6 +362,11 @@ def run(args, dag=None):
     task = dag.get_task(task_id=args.task_id)
     ti = TaskInstance(task, args.execution_date)
     ti.refresh_from_db()
+    if ti.current_state() == "failed":
+        # This behavior is always correct (failed tasks should not run), but is implemented to specifically handle the
+        # case where a worker goes down, the celery task gets re-queued, and the scheduler kills the airflow task
+        # without knowing to revoke the task from the celery queue.
+        return
 
     log = logging.getLogger('airflow.task')
     if args.raw:
@@ -891,13 +896,56 @@ def worker(args):
         stdout.close()
         stderr.close()
     else:
-        signal.signal(signal.SIGINT, sigint_handler)
-        signal.signal(signal.SIGTERM, sigint_handler)
+        serve_logs_proc = subprocess.Popen(['airflow', 'serve_logs'], env=env)
+        celery_proc = subprocess.Popen(
+            [
+                'celery',
+                'worker',
+                '-A', 'airflow.executors.celery_executor',
+                '-O', 'fair',
+                '-Q', str(args.queues),
+                '-c', str(args.concurrency)
+            ],
+            env=env,
+            # don't inherit stdin, so that Ctrl-C is not handled twice
+            stdin=subprocess.PIPE
+        )
 
-        sp = subprocess.Popen(['airflow', 'serve_logs'], env=env)
+        def kill_proc(dummy_signum, dummy_frame):
+            serve_logs_proc.terminate()
 
-        worker.run(**options)
-        sp.kill()
+            # Send SIGTERM to celery master process so it will stop accepting new tasks. The celery master process will
+            # wait until the celery workers finish to shut down.
+            #
+            # - celery master process    <------- SIGTERM
+            #   \- celery worker process
+            #      \- airflow run
+            #   \- celery worker process
+            #      \- airflow run
+            logging.debug('Sending SIGTERM to Celery')
+            celery_proc.terminate()
+
+            # 2. Send SIGKILL to each celery worker process.  This will trigger task re-queueing by the master process.
+            #
+            # - celery master process
+            #   \- celery worker process <------- SIGKILL
+            #      \- airflow run
+            #   \- celery worker process <------- SIGKILL
+            #      \- airflow run
+            celery_workers = psutil.Process(celery_proc.pid).children()
+            for celery_worker in celery_workers:
+                logging.debug('sending SIGTERM to ', celery_worker.cmdline()[0])
+                celery_worker.send_signal(signal.SIGKILL)
+
+            # 3. Wait for warm shutdown to finish, allowing extra time for the dust to settle.  (Testing has shown this
+            #    extra time to be necessary).
+            celery_proc.wait()
+
+        signal.signal(signal.SIGINT, kill_proc)
+        signal.signal(signal.SIGTERM, kill_proc)
+
+        while True:
+            pass
 
 
 def initdb(args):  # noqa
@@ -1600,7 +1648,7 @@ class CLIFactory(object):
                      'log_file'),
         }, {
             'func': worker,
-            'help': "Start a Celery worker node",
+            'help': "Supervise or daemonize a Celery worker node",
             'args': ('do_pickle', 'queues', 'concurrency', 'celery_hostname',
                      'pid', 'daemon', 'stdout', 'stderr', 'log_file'),
         }, {
