@@ -19,7 +19,7 @@ from airflow import configuration
 from datetime import datetime
 import string
 import traceback
-from airflow.contrib.utils.kubernetes_utils import retryable_check_output
+from airflow.contrib.utils.kubernetes_utils import retryable_check_output, namespaced_kubectl
 
 try:
     import ujson as json
@@ -175,8 +175,9 @@ class BQGCSTaskHandler(GCSTaskHandler):
         :type: dict
 
         """
-        return json.loads(retryable_check_output(args=[
-            'kubectl', '--namespace', 'airflow-{}'.format(configuration.get('core', 'environment_suffix')), 'get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]))
+        return json.loads(retryable_check_output(
+            args=namespaced_kubectl() + ['get', 'pods', '-o', 'json', '-l', 'job-name==%s' % job_name]
+        ))
 
     @staticmethod
     def generate_query(bq_table_name, pod_id, start_date, end_date):

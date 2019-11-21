@@ -28,7 +28,6 @@ import socket
 import sys
 import threading
 import time
-import json
 from collections import defaultdict
 from datetime import datetime
 from past.builtins import basestring
