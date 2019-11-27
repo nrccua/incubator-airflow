@@ -236,7 +236,7 @@ def do_setup():
             'python-daemon>=2.1.1, <2.2',
             'python-dateutil>=2.3, <3',
             'python-nvd3==0.14.2',
-            'requests>=2.5.1, <3',
+            'requests>=2.22.0, <3',
             'setproctitle>=1.1.8, <2',
             'sqlalchemy>=0.9.8',
             'tabulate>=0.7.5, <0.8.0',
