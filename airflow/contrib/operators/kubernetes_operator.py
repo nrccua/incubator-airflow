@@ -161,6 +161,7 @@ class KubernetesJobOperator(BaseOperator):
         """
         logging.info("KILLING job {}".format(str(job_name)))
         try:
+            raise Exception("PSYCH!")
             result = retryable_check_output(args=namespaced_kubectl() + [
                 'delete',
                 '--ignore-not-found=true',  # in case we hit an edge case on retry
