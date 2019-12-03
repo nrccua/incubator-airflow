@@ -302,6 +302,8 @@ class KubernetesJobOperator(BaseOperator):
                         # In this scenario, we want to immediately stop polling, and retry job deletion.
                         has_live_existed = True
                         has_live = False
+                    elif 'Failed' == pod['status']['phase']:
+                        raise Exception("Containers failed!")
                     else:
                         raise Exception(
                             "Encountered pod state {state} - no behavior has been prepared for pods in this state!".format(
