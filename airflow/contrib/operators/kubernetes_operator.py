@@ -155,13 +155,15 @@ class KubernetesJobOperator(BaseOperator):
             **kwargs
         )
 
-    def clean_up(self, job_name):
+    def clean_up(self, job_name, try_number=-1):
         """
         Deletes the job. Deleting the job deletes are related pods.
         """
+        logging.info("KILLING try {}".format(str(try_number)))
         logging.info("KILLING job {}".format(str(job_name)))
         try:
-            raise Exception("PSYCH!")
+            if try_number <= 1:
+                raise Exception("PSYCH!")
             result = retryable_check_output(args=namespaced_kubectl() + [
                 'delete',
                 '--ignore-not-found=true',  # in case we hit an edge case on retry
@@ -468,10 +470,10 @@ class KubernetesJobOperator(BaseOperator):
     @provide_session
     def execute(self, context, session=None):
 
-        if self.die_if_duplicate:
+        current_task_instance = TaskInstance(self, context['execution_date'])
+        current_task_instance.refresh_from_db(include_queue_time=True)
 
-            current_task_instance = TaskInstance(self, context['execution_date'])
-            current_task_instance.refresh_from_db(include_queue_time=True)
+        if self.die_if_duplicate:
 
             TI = TaskInstance
             instances_that_are_running = session.query(TI).filter(
@@ -515,4 +517,4 @@ class KubernetesJobOperator(BaseOperator):
             except Exception as ex:
                 logging.error("Failed to process container logs: %s" % ex.message, extra={'err': ex})
 
-            self.clean_up(job_name)
+            self.clean_up(job_name, current_task_instance.try_number)
