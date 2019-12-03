@@ -295,6 +295,21 @@ class KubernetesJobOperator(BaseOperator):
                         if live_cnt > 0:
                             has_live = True
                             break
+                    elif 'Succeeded' == pod['status']['phase']:
+                        # For us to end up in this block, the job has to be Running and the pod has to be Succeeded.
+                        # This happens when (on a previous attempt) we successfully finished execution, killed dependent
+                        # containers, and failed to delete the job.
+                        # In this scenario, we want to immediately stop polling, and retry job deletion.
+                        has_live_existed = True
+                        has_live = False
+                    elif 'Failed' == pod['status']['phase']:
+                        raise Exception("Containers failed!")
+                    else:
+                        raise Exception(
+                            "Encountered pod state {state} - no behavior has been prepared for pods in this state!".format(
+                                state=pod["status"]["phase"]
+                            )
+                        )
                 total_pods = len(pod_output['items'])
                 logging.info("total pods: {total_pods}".format(total_pods=total_pods))
                 has_live_existed = has_live_existed or has_live
