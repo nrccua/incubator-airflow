@@ -1718,7 +1718,7 @@ class WebUiTests(unittest.TestCase):
             '/admin/airflow/graph?dag_id=example_bash_operator')
         self.assertIn("runme_0", response.data.decode('utf-8'))
         response = self.app.get(
-            '/admin/airflow/tree?num_runs=25&dag_id=example_bash_operator')
+            '/admin/airflow/tree?num_runs=5&dag_id=example_bash_operator')
         self.assertIn("runme_0", response.data.decode('utf-8'))
         response = self.app.get(
             '/admin/airflow/duration?days=30&dag_id=example_bash_operator')
