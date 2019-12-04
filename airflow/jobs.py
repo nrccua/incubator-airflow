@@ -20,6 +20,8 @@ from __future__ import unicode_literals
 import getpass
 import logging
 import multiprocessing
+import json
+import traceback
 import os
 import psutil
 import signal
@@ -226,8 +228,30 @@ class BaseJob(Base, LoggingMixin):
         queued_tis = self.executor.queued_tasks
         # also consider running as the state might not have changed in the db yet
         running_tis = self.executor.running
+        try:
+            self.log.info("running tis:\n{}".format(json.dumps(running_tis)))
+        except:
+            self.log.info("failed to log running tis:")
+            self.log.info(traceback.format_exc())
+        try:
+            self.log.info("running ti keys:\n{}".format(json.dumps(running_tis.keys())))
+        except:
+            self.log.info("failed to log running ti keys:")
+            self.log.info(traceback.format_exc())
 
-        resettable_states = [State.SCHEDULED, State.QUEUED]
+        try:
+            self.log.info("queued tis:\n{}".format(json.dumps(queued_tis)))
+        except:
+            self.log.info("failed to log queued tis:")
+            self.log.info(traceback.format_exc())
+        try:
+            self.log.info("queued ti keys:\n{}".format(json.dumps(queued_tis.keys())))
+        except:
+            self.log.info("failed to log queued ti keys:")
+            self.log.info(traceback.format_exc())
+
+
+        resettable_states = [State.SCHEDULED, State.QUEUED, State.RUNNING]
         TI = models.TaskInstance
         DR = models.DagRun
         if filter_by_dag_run is None:
@@ -241,7 +265,6 @@ class BaseJob(Base, LoggingMixin):
                         TI.execution_date == DR.execution_date))
                 .filter(
                     DR.state == State.RUNNING,
-                    DR.external_trigger == False,
                     DR.run_id.notlike(BackfillJob.ID_PREFIX + '%'),
                     TI.state.in_(resettable_states))).all()
         else:

@@ -1454,7 +1454,7 @@ class TaskInstance(Base, LoggingMixin):
 
         # Another worker might have started running this task instance while
         # the current worker process was blocked on refresh_from_db
-        if self.state == State.RUNNING and (self.operator not in ["KubernetesJobOperator", "AppEngineOperatorAsync"]):
+        if self.state == State.RUNNING:
             msg = "Task Instance already running {}".format(self)
             self.log.warning(msg)
             session.commit()
