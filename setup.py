@@ -107,7 +107,7 @@ async = [
 azure = ['azure-storage>=0.34.0']
 sendgrid = ['sendgrid>=5.2.0']
 celery = [
-    'celery==4.1.1',
+    'celery>=4.0.0',
     'flower>=0.7.3'
 ]
 cgroups = [
