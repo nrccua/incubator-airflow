@@ -26,7 +26,7 @@ class NotRunningDep(BaseTIDep):
 
     @provide_session
     def _get_dep_statuses(self, ti, session, dep_context):
-        if (ti.state == State.RUNNING) and (ti.operator not in ["KubernetesJobOperator", "AppEngineOperatorAsync"]):
+        if ti.state == State.RUNNING:
             yield self._failing_status(
                 reason="Task is already running, it started on {0}.".format(
                     ti.start_date))
