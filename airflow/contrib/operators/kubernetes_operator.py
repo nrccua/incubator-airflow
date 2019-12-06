@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import yaml
+import traceback
 from airflow.utils.state import State
 from airflow.utils.db import provide_session
 from airflow.contrib.utils.kubernetes_utils import retryable_check_output
@@ -160,16 +161,14 @@ class KubernetesJobOperator(BaseOperator):
         Deletes the job. Deleting the job deletes are related pods.
         """
         logging.info("KILLING job {}".format(str(job_name)))
-        try:
-            result = retryable_check_output(args=namespaced_kubectl() + [
-                'delete',
-                '--ignore-not-found=true',  # in case we hit an edge case on retry
-                'job',
-                job_name
-            ])
-        except subprocess.CalledProcessError:
-            logging.error("Failed to delete pod - it may have already been destroyed.")
+        result = retryable_check_output(args=namespaced_kubectl() + [
+            'delete',
+            '--ignore-not-found=true',  # in case we hit an edge case on retry
+            'job',
+            job_name
+        ])
         logging.info(result)
+
 
     def on_kill(self):
         """
@@ -249,7 +248,6 @@ class KubernetesJobOperator(BaseOperator):
                     pass
 
                 if "failed" == status:
-                    self.log_container_logs(job_name)
                     raise Exception('%s has failed pods, failing task.' % job_name)
 
                 if "complete" == status:
@@ -513,7 +511,11 @@ class KubernetesJobOperator(BaseOperator):
             try:
                 # don't consider the job failed if this fails!
                 self.log_container_logs(job_name, pod_output=pod_output)
+                stacktrace = traceback.format_exc().rstrip()
+                if stacktrace != "None":
+                    logging.error(
+                        "Got an exception during airflow worker execution!  Stack trace:\n{}".format(traceback))
             except Exception as ex:
-                logging.error("Failed to process container logs: %s" % ex.message, extra={'err': ex})
+                logging.error("Failed to process container logs:\n%s" % traceback.format_exc(), extra={'err': ex})
 
             self.clean_up(job_name)
