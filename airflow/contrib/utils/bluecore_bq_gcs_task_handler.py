@@ -17,6 +17,7 @@ from airflow.utils.log.gcs_task_handler import GCSTaskHandler
 from airflow.utils.log.file_task_handler import FileTaskHandler
 from airflow import configuration
 from datetime import datetime
+import subprocess
 import string
 import traceback
 from airflow.contrib.utils.kubernetes_utils import retryable_check_output, namespaced_kubectl
@@ -38,6 +39,11 @@ class BQGCSTaskHandler(GCSTaskHandler):
 
     def __init__(self, base_log_folder, gcs_log_folder, filename_template):
         super(BQGCSTaskHandler, self).__init__(base_log_folder, gcs_log_folder, filename_template)
+
+    def get_hostname(self, ti):
+        return json.loads(subprocess.check_output(
+            namespaced_kubectl() + ["get", "-o", "json", "pod/{}".format(ti.hostname)]
+        ))['status']['podIP']
 
     def _read(self, ti, try_number):
         """

@@ -45,6 +45,7 @@ import textwrap
 import traceback
 import warnings
 import hashlib
+import subprocess
 from urllib.parse import urlparse
 
 from sqlalchemy import (
@@ -364,7 +365,10 @@ class DagBag(BaseDagBag, LoggingMixin):
                     ti.task = task
                     if ti.operator == "KubernetesJobOperator":
                         from airflow.contrib.utils.kubernetes_utils import uniquify_job_name
-                        task.clean_up(uniquify_job_name(task, {'execution_date': ti.execution_date}))
+                        try:
+                            task.clean_up(uniquify_job_name(task, {'execution_date': ti.execution_date}))
+                        except subprocess.CalledProcessError:
+                            logging.error("Failed to delete pod - it may have already been destroyed.")
 
                     ti.handle_failure("{} killed as zombie".format(str(ti)))
                     self.log.info('Marked zombie job %s as failed', ti)

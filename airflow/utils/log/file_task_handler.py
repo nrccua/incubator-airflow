@@ -78,6 +78,9 @@ class FileTaskHandler(logging.Handler):
                                              execution_date=ti.execution_date.isoformat(),
                                              try_number=try_number)
 
+    def get_hostname(self, ti):
+        return ti.hostname
+
     def _read(self, ti, try_number):
         """
         Template method that contains custom logic of reading
@@ -102,9 +105,9 @@ class FileTaskHandler(logging.Handler):
                 log = "*** Failed to load local log file: {}. {}\n".format(location, str(e))
         else:
             url = os.path.join(
-                "http://{ti.hostname}:{worker_log_server_port}/log", log_relative_path
+                "http://{hostname}:{worker_log_server_port}/log", log_relative_path
             ).format(
-                ti=ti,
+                hostname=self.get_hostname(ti),
                 worker_log_server_port=conf.get('celery', 'WORKER_LOG_SERVER_PORT')
             )
             log += "*** Log file isn't local.\n"
