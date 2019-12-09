@@ -496,6 +496,7 @@ class DagFileProcessor(AbstractDagFileProcessor, LoggingMixin):
 
 
 class SchedulerJob(BaseJob):
+
     """
     This SchedulerJob runs for a specific time interval and schedules the jobs
     that are ready to run. It figures out the latest runs for each
@@ -1611,6 +1612,8 @@ class SchedulerJob(BaseJob):
         while (datetime.utcnow() - execute_start_time).total_seconds() < \
                 self.run_duration or self.run_duration < 0:
             self.log.debug("Starting Loop...")
+            Stats.incr('scheduler_loop', 1)
+            start_time = datetime.utcnow()
             loop_start_time = time.time()
 
             # Traverse the DAG directory for Python files containing DAGs
@@ -1698,6 +1701,7 @@ class SchedulerJob(BaseJob):
 
             loop_end_time = time.time()
             self.log.debug("Ran scheduling loop in %.2f seconds", loop_end_time - loop_start_time)
+            Stats.histogram('scheduler_loop_histogram', loop_end_time - loop_start_time)
             self.log.debug("Sleeping for %.2f seconds", self._processor_poll_interval)
             time.sleep(self._processor_poll_interval)
 
