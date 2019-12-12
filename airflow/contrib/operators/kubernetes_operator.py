@@ -216,127 +216,107 @@ class KubernetesJobOperator(BaseOperator):
         logging.info('Polling for completion of job: %s' % job_name)
         pod_output = None  # keeping this out here so we can reuse it in the "finally" clause
 
-        try:
-            has_live_existed = False
-            while True:
-                time.sleep(self.sleep_seconds_between_polling)
+        has_live_existed = False
+        while True:
+            time.sleep(self.sleep_seconds_between_polling)
 
-                pod_output = self.get_pods(job_name)
+            pod_output = self.get_pods(job_name)
 
-                job_description = json.loads(
-                    retryable_check_output(namespaced_kubectl() + ['get', 'job', "-o", "json", job_name])
-                )
+            job_description = json.loads(
+                retryable_check_output(namespaced_kubectl() + ['get', 'job', "-o", "json", job_name])
+            )
 
-                status_block = job_description['status']
+            status_block = job_description['status']
 
-                if 'succeeded' in status_block and 'failed' in status_block:
-                    raise Exception("Invalid status block containing both succeeded and failed: %s",
-                                    json.dumps(status_block))
+            if 'succeeded' in status_block and 'failed' in status_block:
+                raise Exception("Invalid status block containing both succeeded and failed: %s",
+                                json.dumps(status_block))
 
-                if 'active' in status_block:
-                    status = 'running'
-                elif 'failed' in status_block:
-                    status = "failed"
-                elif 'succeeded' in status_block:
-                    status = 'complete'
-                else:
-                    status = "pending"
+            if 'active' in status_block:
+                status = 'running'
+            elif 'failed' in status_block:
+                status = "failed"
+            elif 'succeeded' in status_block:
+                status = 'complete'
+            else:
+                status = "pending"
 
-                logging.info('Current status is: %s' % status)
+            logging.info('Current status is: %s' % status)
 
-                if "pending" == status:
-                    pass
+            if "pending" == status:
+                pass
 
-                if "failed" == status:
-                    raise Exception('%s has failed pods, failing task.' % job_name)
+            if "failed" == status:
+                raise Exception('%s has failed pods, failing task.' % job_name)
 
-                if "complete" == status:
-                    return pod_output
+            if "complete" == status:
+                return pod_output
 
-                # Determine if we have any containers left running in each pod of the job.
-                # Dependent containers don't count.
-                # If there are no pods left running anything, we are done here. Cleaning up
-                # dependent containers will be left to the top-level `finally` block down below.
-                has_live = False
-                for pod in pod_output['items']:
-                    if 'Unknown' == pod['status']['phase']:
-                        # we haven't run yet
+            # Determine if we have any containers left running in each pod of the job.
+            # Dependent containers don't count.
+            # If there are no pods left running anything, we are done here. Cleaning up
+            # dependent containers will be left to the top-level `finally` block down below.
+            has_live = False
+            for pod in pod_output['items']:
+                if 'Unknown' == pod['status']['phase']:
+                    # we haven't run yet
+                    has_live = True
+                    break
+                elif 'Pending' == pod['status']['phase']:
+                    has_live = True
+                    start_time_s = pod['status'].get('startTime')
+                    if not start_time_s:
+                        logging.info('Pod not yet started')
+                        break
+                    start_time = datetime.strptime(start_time_s, "%Y-%m-%dT%H:%M:%SZ")
+                    start_duration_secs = (datetime.utcnow() - start_time).total_seconds()
+                    if start_duration_secs > 300:
+                        raise Exception('%s has failed to start after %0.2f seconds' % (
+                            job_name,
+                            start_duration_secs,
+                        ))
+                elif 'Running' == pod['status']['phase']:
+                    # get all of the independent containers that are still alive (running or waiting)
+                    live_cnt = 0
+                    for cs in pod['status']['containerStatuses']:
+                        if cs['name'] in dependent_containers:
+                            pass
+                        elif 'terminated' in cs['state']:
+                            has_live_existed = True
+                            exit_code = int(cs['state']['terminated'].get('exitCode', 0))
+                            if exit_code > 0:
+                                raise Exception('%s has failed pods, failing task.' % job_name)
+                        else:
+                            live_cnt += 1
+
+                    if live_cnt > 0:
                         has_live = True
                         break
-                    elif 'Pending' == pod['status']['phase']:
-                        has_live = True
-                        start_time_s = pod['status'].get('startTime')
-                        if not start_time_s:
-                            logging.info('Pod not yet started')
-                            break
-                        start_time = datetime.strptime(start_time_s, "%Y-%m-%dT%H:%M:%SZ")
-                        start_duration_secs = (datetime.utcnow() - start_time).total_seconds()
-                        if start_duration_secs > 300:
-                            raise Exception('%s has failed to start after %0.2f seconds' % (
-                                job_name,
-                                start_duration_secs,
-                            ))
-                    elif 'Running' == pod['status']['phase']:
-                        # get all of the independent containers that are still alive (running or waiting)
-                        live_cnt = 0
-                        for cs in pod['status']['containerStatuses']:
-                            if cs['name'] in dependent_containers:
-                                pass
-                            elif 'terminated' in cs['state']:
-                                has_live_existed = True
-                                exit_code = int(cs['state']['terminated'].get('exitCode', 0))
-                                if exit_code > 0:
-                                    raise Exception('%s has failed pods, failing task.' % job_name)
-                            else:
-                                live_cnt += 1
-
-                        if live_cnt > 0:
-                            has_live = True
-                            break
-                    elif 'Succeeded' == pod['status']['phase']:
-                        # For us to end up in this block, the job has to be Running and the pod has to be Succeeded.
-                        # This happens when (on a previous attempt) we successfully finished execution, killed dependent
-                        # containers, and failed to delete the job.
-                        # In this scenario, we want to immediately stop polling, and retry job deletion.
-                        has_live_existed = True
-                        has_live = False
-                    elif 'Failed' == pod['status']['phase']:
-                        raise Exception("Containers failed!")
-                    else:
-                        raise Exception(
-                            "Encountered pod state {state} - no behavior has been prepared for pods in this state!".format(
-                                state=pod["status"]["phase"]
-                            )
+                elif 'Succeeded' == pod['status']['phase']:
+                    # For us to end up in this block, the job has to be Running and the pod has to be Succeeded.
+                    # This happens when (on a previous attempt) we successfully finished execution, killed dependent
+                    # containers, and failed to delete the job.
+                    # In this scenario, we want to immediately stop polling, and retry job deletion.
+                    has_live_existed = True
+                    has_live = False
+                elif 'Failed' == pod['status']['phase']:
+                    raise Exception("Containers failed!")
+                else:
+                    raise Exception(
+                        "Encountered pod state {state} - no behavior has been prepared for pods in this state!".format(
+                            state=pod["status"]["phase"]
                         )
-                total_pods = len(pod_output['items'])
-                logging.info("total pods: {total_pods}".format(total_pods=total_pods))
-                has_live_existed = has_live_existed or has_live
-                # if we get to this point but for some reason there are no pods, log it and retry
-                if not has_live_existed:
-                    logging.info('No pods have run. Retrying.')
-                # we have no live pods, but live pods have existed.
-                elif not has_live:
-                    logging.info('No live, independent pods left.')
-                    return pod_output
-        finally:
-            if pod_output:
-                # let's clean up all our old pods. we'll kill the entry point (PID 1) in each running container
-                for pod in pod_output.get('items', []):
-                    # if we never got to running, there won't be containerStatuses
-                    if 'containerStatuses' in pod['status']:
-                        live_containers = [
-                            cs['name']
-                            for cs
-                            in pod['status']['containerStatuses']
-                            if 'running' in cs['state']
-                        ]
-                        for cname in live_containers:
-                            logging.info('killing dependent live container %s' % cname)
-                            # there is a race condition between reading the status and trying to kill the running
-                            # container. ignore the return code to duck the issue.
-                            subprocess.call(
-                                namespaced_kubectl() + ['exec', pod['metadata']['name'], '-c', cname, 'kill', '1']
-                            )
+                    )
+            total_pods = len(pod_output['items'])
+            logging.info("total pods: {total_pods}".format(total_pods=total_pods))
+            has_live_existed = has_live_existed or has_live
+            # if we get to this point but for some reason there are no pods, log it and retry
+            if not has_live_existed:
+                logging.info('No pods have run. Retrying.')
+            # we have no live pods, but live pods have existed.
+            elif not has_live:
+                logging.info('No live, independent pods left.')
+                return pod_output
 
     def create_job_yaml(self, context):
         """
@@ -515,7 +495,27 @@ class KubernetesJobOperator(BaseOperator):
                 if stacktrace != "None":
                     logging.error(
                         "Got an exception during airflow worker execution!  Stack trace:\n{}".format(traceback))
+
+                if pod_output:
+                    # let's clean up all our old pods. we'll kill the entry point (PID 1) in each running container
+                    for pod in pod_output.get('items', []):
+                        # if we never got to running, there won't be containerStatuses
+                        if 'containerStatuses' in pod['status']:
+                            live_containers = [
+                                cs['name']
+                                for cs
+                                in pod['status']['containerStatuses']
+                                if 'running' in cs['state']
+                            ]
+                            for cname in live_containers:
+                                logging.info('killing dependent live container %s' % cname)
+                                # there is a race condition between reading the status and trying to kill the running
+                                # container. ignore the return code to duck the issue.
+                                subprocess.call(
+                                    namespaced_kubectl() + ['exec', pod['metadata']['name'], '-c', cname, 'kill', '1']
+                                )
+
             except Exception as ex:
-                logging.error("Failed to process container logs:\n%s" % traceback.format_exc(), extra={'err': ex})
+                logging.error("Failed to clean up kubernetes job:\n%s" % traceback.format_exc(), extra={'err': ex})
 
             self.clean_up(job_name)
