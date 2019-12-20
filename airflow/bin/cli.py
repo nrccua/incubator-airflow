@@ -944,8 +944,7 @@ def worker(args):
         signal.signal(signal.SIGINT, kill_proc)
         signal.signal(signal.SIGTERM, kill_proc)
 
-        while True:
-            pass
+        signal.pause()
 
 
 def initdb(args):  # noqa
