@@ -227,7 +227,7 @@ class BaseJob(Base, LoggingMixin):
         # also consider running as the state might not have changed in the db yet
         running_tis = self.executor.running
 
-        resettable_states = [State.SCHEDULED, State.QUEUED, State.RUNNING]
+        resettable_states = [State.SCHEDULED, State.QUEUED]
         TI = models.TaskInstance
         DR = models.DagRun
         if filter_by_dag_run is None:
@@ -238,11 +238,19 @@ class BaseJob(Base, LoggingMixin):
                     DR,
                     and_(
                         TI.dag_id == DR.dag_id,
-                        TI.execution_date == DR.execution_date))
-                .filter(
+                        TI.execution_date == DR.execution_date)
+                ).filter(
                     DR.state == State.RUNNING,
                     DR.run_id.notlike(BackfillJob.ID_PREFIX + '%'),
-                    TI.state.in_(resettable_states))).all()
+                    or_(
+                        TI.state.in_(resettable_states),
+                        and_(
+                            TI.state == State.RUNNING,
+                            TI.operator.in_(["AppEngineOperatorAsync", "KubernetesJobOperator"])
+                        )
+                    )
+                )
+            ).all()
         else:
             resettable_tis = filter_by_dag_run.get_task_instances(state=resettable_states,
                                                                   session=session)
