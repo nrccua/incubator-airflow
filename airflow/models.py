@@ -1521,7 +1521,7 @@ class TaskInstance(Base, LoggingMixin):
         context = {}
         try:
             if not mark_success:
-                context = self.get_template_context()
+                context = self.get_template_context(session=session)
 
                 task_copy = copy.copy(task)
                 self.task = task_copy
@@ -1841,6 +1841,7 @@ class TaskInstance(Base, LoggingMixin):
             'latest_date': ds,
             'macros': macros,
             'params': params,
+            'session': session,
             'tables': tables,
             'task': task,
             'task_instance': self,
