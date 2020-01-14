@@ -230,6 +230,19 @@ class BaseJob(Base, LoggingMixin):
         resettable_states = [State.SCHEDULED, State.QUEUED]
         TI = models.TaskInstance
         DR = models.DagRun
+
+        task_is_resettable_predicate = or_(
+            TI.state.in_(resettable_states),
+            and_(
+                TI.state == State.RUNNING,
+                # These two operators are "remote" operators - that is, operators that
+                # spin up external resources.  They have been engineered to be idempotent,
+                # so even if they're in state running, they can be considered orphans.
+                # TODO make this an operator property rather than a mystical hard-coded string list.
+                TI.operator.in_(["AppEngineOperatorAsync", "KubernetesJobOperator"])
+            )
+        )
+
         if filter_by_dag_run is None:
             resettable_tis = (
                 session
@@ -242,16 +255,16 @@ class BaseJob(Base, LoggingMixin):
                 ).filter(
                     DR.state == State.RUNNING,
                     DR.run_id.notlike(BackfillJob.ID_PREFIX + '%'),
-                    or_(
-                        TI.state.in_(resettable_states),
-                        and_(
-                            TI.state == State.RUNNING,
-                            TI.operator.in_(["AppEngineOperatorAsync", "KubernetesJobOperator"])
-                        )
-                    )
+                    task_is_resettable_predicate
                 )
             ).all()
         else:
+            # TODO do the necessary discovery and testing to support remote operator orphan
+            #  detection when this method is called with filter_by_dag_run.
+            # The aforementioned call is only performed by the terribly named BackillJob.
+            # BackfillJobs appear to used solely by the SubDagOperator, which we do not use
+            # here at Bluecore.  Since we do not use this feature, we omit support of it in
+            # the interest of expediency.
             resettable_tis = filter_by_dag_run.get_task_instances(state=resettable_states,
                                                                   session=session)
         tis_to_reset = []
@@ -269,7 +282,7 @@ class BaseJob(Base, LoggingMixin):
         reset_tis = (
             session
             .query(TI)
-            .filter(or_(*filter_for_tis), TI.state.in_(resettable_states))
+            .filter(or_(*filter_for_tis), task_is_resettable_predicate)
             .with_for_update()
             .all())
         for ti in reset_tis:
