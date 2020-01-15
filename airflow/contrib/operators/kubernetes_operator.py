@@ -469,21 +469,22 @@ class KubernetesJobOperator(BaseOperator):
                 raise Exception("A prior execution of this task is already running!  Failing this execution.")
 
         job_name, job_yaml_string = self.create_job_yaml(context)
-        logging.info(job_yaml_string)
-        self.instance_names.append(job_name)  # should happen once, but safety first!
-        self.xcom_push(context, "kubernetes_job_name", job_name)
-
-        with tempfile.NamedTemporaryFile(suffix='.yaml') as f:
-            f.write(job_yaml_string)
-            f.flush()
-            result = subprocess.check_output(args=namespaced_kubectl() + ['apply', '-f', f.name])
-            logging.info(result)
-
-        # Setting pod_output to None, this will prevent a log_container_logs error
-        # if polling fails and self.polling_job_completion is not able to return pod_output.
-        pod_output = None
-
+        
         try:
+            logging.info(job_yaml_string)
+            self.instance_names.append(job_name)  # should happen once, but safety first!
+            self.xcom_push(context, "kubernetes_job_name", job_name)
+
+            with tempfile.NamedTemporaryFile(suffix='.yaml') as f:
+                f.write(job_yaml_string)
+                f.flush()
+                result = subprocess.check_output(args=namespaced_kubectl() + ['apply', '-f', f.name])
+                logging.info(result)
+
+            # Setting pod_output to None, this will prevent a log_container_logs error
+            # if polling fails and self.polling_job_completion is not able to return pod_output.
+            pod_output = None
+
             pod_output = self.poll_job_completion(job_name)
             pod_output = pod_output or self.get_pods(job_name)  # if we didn't get it for some reason
             return None
