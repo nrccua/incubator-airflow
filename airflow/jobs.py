@@ -1663,6 +1663,11 @@ class SchedulerJob(BaseJob):
                 self.log.debug("Waiting for processors to finish since we're using sqlite")
                 processor_manager.wait_until_finished()
 
+            if SchedulerState().get_state() == SchedulerStates.PAUSING:
+                if self._airflow_ready_for_redeploy():
+                    # Only set scheduler to state idle if we're ready to redeploy.
+                    SchedulerState().set_state(SchedulerStates.IDLE)
+
             # Send tasks for execution if available
             simple_dag_bag = SimpleDagBag(simple_dags)
             if len(simple_dags) > 0:
@@ -1685,17 +1690,10 @@ class SchedulerJob(BaseJob):
                                                            State.SCHEDULED],
                                                           State.NONE)
 
-                scheduler_state = SchedulerState().get_state()
-
                 # Only start new operators if scheduler is in state running.
-                if scheduler_state == SchedulerStates.RUNNING:
+                if SchedulerState().get_state() == SchedulerStates.RUNNING:
                     self._execute_task_instances(simple_dag_bag,
                                                      (State.SCHEDULED,))
-                # Only check to see if we can redeploy if scheduler is in state pausing.
-                elif scheduler_state == SchedulerStates.PAUSING:
-                    if self._airflow_ready_for_redeploy():
-                        # Only set scheduler to state idle if we're ready to redeploy.
-                        SchedulerState().set_state(SchedulerStates.IDLE)
 
             # Call heartbeats
             self.log.info("Heartbeating the executor")
