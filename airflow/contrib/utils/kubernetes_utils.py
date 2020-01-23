@@ -204,6 +204,20 @@ def uniquify_job_name(task, context, job_name=None):
         elif hasattr(task, 'command_name'):
             job_name = task.command_name.split('.')[-1]
 
+
+    logging.info(
+        "OLD BEN:\njob_name is {}\nexecution date is {}\ndag_id is {}\ntask_id is {}\ngenerated name is {}".format(
+            job_name, context['execution_date'].isoformat(), task.dag_id, task.task_id,
+            "-".join([
+                job_name,
+                hashlib.sha512(" ".join([
+                    context['execution_date'].isoformat(),
+                    task.dag_id,
+                    task.task_id,
+                ]).encode('utf-8')).hexdigest()[:16]
+            ])
+        )
+    )
     return "-".join([
         job_name,
         hashlib.sha512(" ".join([
