@@ -379,7 +379,7 @@ class KubernetesJobOperator(BaseOperator):
             if 'command' in cs:
                 cs['command'] = list(map(str, enumerate_parameters(cs['command'], self, context=context)))
             # This assumes that env is a dictionary, which is possibly false
-            cs['env'] = cs.get('env', {})
+            cs['env'] = OrderedDict(cs.get('env', {}))
             cs['env'].update(instance_env)
             cs['env'] = dict_to_env(cs['env'], self, context=context)
 
