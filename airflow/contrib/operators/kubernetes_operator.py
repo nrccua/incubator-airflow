@@ -5,6 +5,7 @@ from airflow.contrib.utils.kubernetes_utils import dict_to_env, uniquify_job_nam
     namespaced_kubectl, KubernetesSecretParameter
 from airflow.contrib.utils.parameters import enumerate_parameters
 from datetime import datetime
+from collections import OrderedDict
 import ujson as json
 import logging
 import os
@@ -331,6 +332,7 @@ class KubernetesJobOperator(BaseOperator):
         # Copy the environment variables from the task and evaluate any XComs
         # Add in the AIRFLOW_xxx vars we need to support XComs from within the container
         instance_env = self.env.copy()
+        instance_env = OrderedDict(instance_env)
         instance_env['AIRFLOW_DAG_ID'] = self.dag_id
         instance_env['AIRFLOW_TASK_ID'] = self.task_id
         instance_env['AIRFLOW_ENVIRONMENT'] = configuration.get('core', 'environment')
@@ -469,7 +471,7 @@ class KubernetesJobOperator(BaseOperator):
                 raise Exception("A prior execution of this task is already running!  Failing this execution.")
 
         job_name, job_yaml_string = self.create_job_yaml(context)
-        
+
         try:
             logging.info(job_yaml_string)
             self.instance_names.append(job_name)  # should happen once, but safety first!
