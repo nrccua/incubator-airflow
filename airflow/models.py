@@ -3283,7 +3283,7 @@ class DAG(BaseDag, LoggingMixin):
             TI.dag_id == self.dag_id,
             TI.task_id.in_(self.task_ids),
             TI.state == State.RUNNING,
-        )
+        ).with_hint(TI, 'USE INDEX ti_dag_state', dialect_name='mysql')
         return qry.scalar() >= self.concurrency
 
     @property
@@ -3982,6 +3982,7 @@ class DAG(BaseDag, LoggingMixin):
         Returns the number of task instances in the given DAG.
 
         :param session: ORM session
+        :type session: sqlalchemy.orm.session.Session
         :param dag_id: ID of the DAG to get the task concurrency of
         :type dag_id: unicode
         :param task_ids: A list of valid task IDs for the given DAG
@@ -3995,6 +3996,14 @@ class DAG(BaseDag, LoggingMixin):
             TaskInstance.dag_id == dag_id,
             TaskInstance.task_id.in_(task_ids))
         if states is not None:
+            # Hint added because the MySQL optimizer gives up on using the index
+            # when there are too many task IDs. While forcing the index is not a
+            # generally safe assumption, the only place this function is called
+            # is in airflow.jobs.SchedulerJob._find_executable_task_instances(),
+            # which is looking specifically for running states. That should keep
+            # the number of inspected rows down to a dull roar.
+            # https://docs.sqlalchemy.org/en/13/orm/query.html#sqlalchemy.orm.query.Query.with_hint
+            qry = qry.with_hint(TaskInstance, 'USE INDEX ti_dag_state', dialect_name='mysql')
             if None in states:
                 qry = qry.filter(or_(
                     TaskInstance.state.in_(states),
