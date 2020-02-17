@@ -1138,7 +1138,7 @@ class SchedulerJob(BaseJob):
 
             # DAG IDs with running tasks that equal the concurrency limit of the dag
             dag_id_to_possibly_running_task_count = {}
-            self.log.info("At start len is {}".format(len(executable_tis)))
+
             for task_instance in priority_sorted_task_instances:
                 if open_slots <= 0:
                     self.log.info(
@@ -1175,7 +1175,6 @@ class SchedulerJob(BaseJob):
                         task_instance, dag_id, task_concurrency_limit
                     )
                     continue
-                self.log.info("bypass task concurrency {}".format(len(executable_tis)))
 
                 task_concurrency = simple_dag.get_task_special_arg(task_instance.task_id, 'task_concurrency')
                 if task_concurrency is not None:
@@ -1187,21 +1186,15 @@ class SchedulerJob(BaseJob):
                     else:
                         task_concurrency_map[(task_instance.dag_id, task_instance.task_id)] += 1
 
-                self.log.info("bypass task concurrency map {}".format(len(executable_tis)))
-
                 if self.executor.has_task(task_instance):
                     self.log.debug(
                         "Not handling task %s as the executor reports it is running",
                         task_instance.key
                     )
                     continue
-                self.log.info("bypass has task {}".format(len(executable_tis)))
                 executable_tis.append(task_instance)
-                self.log.info("Added to executable tis - new len is {}".format(len(executable_tis)))
                 open_slots -= 1
                 dag_id_to_possibly_running_task_count[dag_id] += 1
-
-        self.log.info("At end len is {}".format(len(executable_tis)))
 
         task_instance_str = "\n\t".join(
             ["{}".format(x) for x in executable_tis])
