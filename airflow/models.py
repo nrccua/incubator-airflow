@@ -1656,7 +1656,7 @@ class TaskInstance(Base, LoggingMixin):
                 Stats.gauge(
                     'ti_status',
                     value=0,
-                tags=[
+                    tags=[
                         'task_id:%s' % self.task_id,
                         'dag_id:%s' % self.dag_id,
                         'operator:%s' % self.task.__class__.__name__,

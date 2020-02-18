@@ -57,6 +57,7 @@ from airflow.ti_deps.dep_context import (DepContext, SCHEDULER_DEPS)
 from airflow.utils import db as db_utils
 from airflow.utils.log.logging_mixin import LoggingMixin, redirect_stderr, redirect_stdout
 from airflow.www.app import cached_app
+from airflow.utils.state import State
 
 from sqlalchemy import func
 from sqlalchemy.orm import exc
@@ -363,20 +364,19 @@ def run(args, dag=None):
     task = dag.get_task(task_id=args.task_id)
     ti = TaskInstance(task, args.execution_date)
     ti.refresh_from_db(include_job_id=True)
-    from airflow.utils.state import State
-    if ti.current_state() in [
-        State.FAILED,
-        State.SUCCESS,
-        State.UP_FOR_RETRY,
-        State.RUNNING,
-        State.SHUTDOWN,
-        State.SKIPPED
-    ]:
-        # Return if we're not in a valid state for running.
-        return
 
     # Here we're checking that the hostname is not None or the empty string.
     if not args.raw:
+        if ti.current_state() in [
+            State.FAILED,
+            State.SUCCESS,
+            State.UP_FOR_RETRY,
+            State.RUNNING,
+            State.SHUTDOWN,
+            State.SKIPPED
+        ]:
+            # Return if we're not in a valid state for running.
+            return
         # If the hostname of a task is set, another worker process previously attempted to perform this work item,
         # and did not explicitly succeed or fail.
         if ti.hostname:
