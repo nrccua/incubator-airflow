@@ -1663,15 +1663,14 @@ class SchedulerJob(BaseJob):
                 if scheduler_state == SchedulerStates.RUNNING:
                     self._execute_task_instances(simple_dag_bag,
                                                      (State.SCHEDULED,))
+                    # Call heartbeats
+                    self.log.info("Heartbeating the executor")
+                    self.executor.heartbeat()
                 # Only check to see if we can redeploy if scheduler is in state pausing.
                 elif scheduler_state == SchedulerStates.PAUSING:
                     if self._airflow_ready_for_redeploy():
                         # Only set scheduler to state idle if we're ready to redeploy.
                         SchedulerState().set_state(SchedulerStates.IDLE)
-
-            # Call heartbeats
-            self.log.info("Heartbeating the executor")
-            self.executor.heartbeat()
 
             # Process events from the executor
             self._process_executor_events(simple_dag_bag)
@@ -1729,13 +1728,7 @@ class SchedulerJob(BaseJob):
     def _airflow_ready_for_redeploy(self, session=None):
         TI = models.TaskInstance
         # We are not ready to redeploy if there are any runnable tasks that,
-        tis = session.query(TI).filter(
-            or_(
-                TI.state == State.UP_FOR_RETRY,
-                TI.state == State.QUEUED,
-                TI.state == State.RUNNING
-            )
-        ).all()
+        tis = session.query(TI).filter(TI.state == State.RUNNING).all()
         for ti in tis:
             # are not resumable post-deploy.
             if ti.state in [State.RUNNING, State.QUEUED, State.UP_FOR_RETRY] and ti.operator not in ["KubernetesJobOperator", "AppEngineOperatorAsync"]:
