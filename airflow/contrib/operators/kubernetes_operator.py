@@ -469,7 +469,7 @@ class KubernetesJobOperator(BaseOperator):
                 raise Exception("A prior execution of this task is already running!  Failing this execution.")
 
         job_name, job_yaml_string = self.create_job_yaml(context)
-        
+
         try:
             logging.info(job_yaml_string)
             self.instance_names.append(job_name)  # should happen once, but safety first!

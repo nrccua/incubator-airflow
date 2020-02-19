@@ -1432,34 +1432,6 @@ class SchedulerJob(BaseJob):
                 "Executor reports %s.%s execution_date=%s as %s",
                 dag_id, task_id, execution_date, state
             )
-            if state == State.FAILED or state == State.SUCCESS:
-                qry = session.query(TI).filter(TI.dag_id == dag_id,
-                                               TI.task_id == task_id,
-                                               TI.execution_date == execution_date)
-                ti = qry.first()
-                if not ti:
-                    self.log.warning("TaskInstance %s went missing from the database", ti)
-                    continue
-
-                # TODO: should we fail RUNNING as well, as we do in Backfills?
-                if ti.state == State.QUEUED:
-                    msg = ("Executor reports task instance %s finished (%s) "
-                           "although the task says its %s. Was the task "
-                           "killed externally?".format(ti, state, ti.state))
-                    self.log.error(msg)
-                    try:
-                        simple_dag = simple_dag_bag.get_dag(dag_id)
-                        dagbag = models.DagBag(simple_dag.full_filepath)
-                        dag = dagbag.get_dag(dag_id)
-                        ti.task = dag.get_task(task_id)
-                        ti.handle_failure(msg)
-                    except Exception:
-                        self.log.error("Cannot load the dag bag to handle failure for %s"
-                                       ". Setting task to FAILED without callbacks or "
-                                       "retries. Do you have enough resources?", ti)
-                        ti.state = State.FAILED
-                        session.merge(ti)
-                        session.commit()
 
     def _log_file_processing_stats(self,
                                    known_file_paths,
@@ -2619,14 +2591,14 @@ class LocalTaskJob(BaseJob):
 
     @provide_session
     def heartbeat_callback(self, session=None):
-        """Self destruct task if state has been moved away from running externally"""
+        """Reset state to running if state set to null, scheduled, or queued externally.  Self-destruct if state is set to any other state externally."""
 
         if self.terminating:
             # ensure termination if processes are created later
             self.task_runner.terminate()
             return
 
-        self.task_instance.refresh_from_db()
+        self.task_instance.refresh_from_db(lock_for_update=True)
         ti = self.task_instance
 
         fqdn = socket.getfqdn()
@@ -2644,11 +2616,25 @@ class LocalTaskJob(BaseJob):
                 self.log.warning("Recorded pid {ti.pid} does not match the current pid "
                                 "{current_pid}".format(**locals()))
                 raise AirflowException("PID of job runner does not match")
-        elif (self.task_runner.return_code() is None
-              and hasattr(self.task_runner, 'process')):
-            self.log.warning(
-                "State of this instance has been externally set to %s. Taking the poison pill.",
-                ti.state
-            )
-            self.task_runner.terminate()
-            self.terminating = True
+        elif self.task_runner.return_code() is None and hasattr(self.task_runner, 'process'):
+            if ti.state in [State.NONE, State.SCHEDULED, State.QUEUED]:
+                self.log.warning(
+                    "State of task %s has been externally set to %s. I am still running this task, "
+                    "so I'm setting the state back to RUNNING.",
+                    ti.task_id,
+                    ti.state
+                )
+                ti.state = State.RUNNING
+                session.merge(ti)
+                session.commit()
+                return
+            else:
+                self.log.warning(
+                    "State of this instance has been externally set to %s. Taking the poison pill.",
+                    ti.state
+                )
+                self.task_runner.terminate()
+                self.terminating = True
+
+        session.merge(ti)
+        session.commit()

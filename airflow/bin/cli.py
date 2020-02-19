@@ -30,6 +30,7 @@ from collections import namedtuple
 from dateutil.parser import parse as parsedate
 import json
 from tabulate import tabulate
+from datetime import datetime, timedelta
 
 import daemon
 from daemon.pidfile import TimeoutPIDLockFile
@@ -56,6 +57,7 @@ from airflow.ti_deps.dep_context import (DepContext, SCHEDULER_DEPS)
 from airflow.utils import db as db_utils
 from airflow.utils.log.logging_mixin import LoggingMixin, redirect_stderr, redirect_stdout
 from airflow.www.app import cached_app
+from airflow.utils.state import State
 
 from sqlalchemy import func
 from sqlalchemy.orm import exc
@@ -348,10 +350,10 @@ def run(args, dag=None):
         settings.configure_vars()
         settings.configure_orm()
 
+    session = settings.Session()
     if not args.pickle and not dag:
         dag = get_dag(args)
     elif not dag:
-        session = settings.Session()
         log.info('Loading pickle id {args.pickle}'.format(args=args))
         dag_pickle = session.query(
             DagPickle).filter(DagPickle.id == args.pickle).first()
@@ -361,12 +363,85 @@ def run(args, dag=None):
 
     task = dag.get_task(task_id=args.task_id)
     ti = TaskInstance(task, args.execution_date)
-    ti.refresh_from_db()
-    if ti.current_state() == "failed":
-        # This behavior is always correct (failed tasks should not run), but is implemented to specifically handle the
-        # case where a worker goes down, the celery task gets re-queued, and the scheduler kills the airflow task
-        # without knowing to revoke the task from the celery queue.
-        return
+    ti.refresh_from_db(include_job_id=True)
+
+    # Here we're checking that the hostname is not None or the empty string.
+    if not args.raw:
+        if ti.current_state() in [
+            State.FAILED,
+            State.SUCCESS,
+            State.UP_FOR_RETRY,
+            State.RUNNING,
+            State.SHUTDOWN,
+            State.SKIPPED
+        ]:
+            # Return if we're not in a valid state for running.
+            return
+        # If the hostname of a task is set, another worker process previously attempted to perform this work item,
+        # and did not explicitly succeed or fail.
+        if ti.hostname:
+            log.info(
+                "For submitted task \"{}\" hostname is set to \"{}\" - checking to see if this task is a zombie yet.".format(
+                    ti.task_id, ti.hostname
+                )
+            )
+            # If a previous version of this task exists, we only want to run a new version if the old version zombies
+            # out.  If the previous version is not zombied out, it is still possible that the scheduler bounced, and
+            # incorrectly thought this task was an orphan, in which case the previous version will eventually reclaim
+            # it.
+            from airflow.jobs import LocalTaskJob as LJ
+            TI = TaskInstance
+            secs = conf.getint('scheduler', 'scheduler_zombie_task_threshold')
+            limit_dttm = datetime.utcnow() - timedelta(seconds=secs)
+            log.info("Task id is %s job id is %s", ti.task_id, ti.job_id)
+            latest_heartbeat = session.query(LJ).filter(LJ.id == ti.job_id).first().latest_heartbeat
+            if latest_heartbeat >= limit_dttm:
+
+                real_ti = session.query(TI).filter(
+                    TI.dag_id == ti.dag_id,
+                    TI.task_id == ti.task_id,
+                    TI.execution_date == ti.execution_date
+                ).with_for_update().first()
+
+                if real_ti.state == State.RUNNING:
+                    log.info(
+                        "For submitted task \"{}\" the hostname was set, and the heartbeat indicates that the previous "
+                        "worker is still running.  Additionally, the state of the task has been set to \"running\" "
+                        "which indicates that the previous worker has re-asserted ownership over this task.  "
+                        "Exiting.".format(
+                            ti.task_id
+                        )
+                    )
+                    session.merge(real_ti)
+                    session.commit()
+                    return
+                else:
+                    log.info(
+                        "For submitted task \"{}\" the hostname was set, and the heartbeat indicates that the previous "
+                        "worker could still be running.  The state of the task instance has not been set to "
+                        "\"running\" yet so we're setting the task state to None to give the previous worker time to "
+                        "re-assert ownership over this task.  Exiting.".format(
+                            ti.task_id
+                        )
+                    )
+                    real_ti.state = State.NONE
+                    session.merge(real_ti)
+                    session.commit()
+                    return
+            else:
+                log.info(
+                    "For submitted task \"{}\" the hostname was set, but the heartbeat indicates that the previous "
+                    "worker has died.  Proceeding with task run.".format(
+                        ti.task_id
+                    )
+                )
+        else:
+            log.info(
+                "For submitted task \"{}\" the hostname was not set, which implies that there exists no active "
+                "previous worker.  Proceeding with task run.".format(
+                    ti.task_id
+                )
+            )
 
     log = logging.getLogger('airflow.task')
     if args.raw:

@@ -358,6 +358,11 @@ class DagBag(BaseDagBag, LoggingMixin):
         )
 
         for ti in tis:
+            # This is necessary because the task instances in this loop find themselves detached from the session that
+            # retrieved them after a single iteration.  This is almost certainly a bug of some kind.
+            # TODO fix or explain the error that occurs here and elsewhere in airflow where models get detached from the
+            # TODO - database.
+            ti.refresh_from_db()
             if ti and ti.dag_id in self.dags:
                 dag = self.dags[ti.dag_id]
                 if ti.task_id in dag.task_ids:
@@ -371,6 +376,61 @@ class DagBag(BaseDagBag, LoggingMixin):
                             logging.error("Failed to delete pod - it may have already been destroyed.")
 
                     ti.handle_failure("{} killed as zombie".format(str(ti)))
+
+                    # TODO Tasks that are zombied out are not retried.  Fix this.  Details below:
+                    # When trying to figure out why zombies aren't getting retried, one naturally finds themselves in
+                    # SchedulerJob._find_executable_task_instances().  Adding some logging there will reveal that the
+                    # SchedulerJob thinks it's running the zombied tasks already because they are stored in an
+                    # in-memory map.  This would naturally lead one to the conclusion that something like the below was
+                    # needed here:
+                    #
+                    # if ti_key in self.executor.queued_tasks:
+                    #     del self.executor.queued_tasks[ti_key]
+                    # if ti_key in self.executor.running:
+                    #     del self.executor.running[ti_key]
+                    #
+                    # What you would find, however, is that the above does not work.  The reason it doesn't work is
+                    # a matter of some regrettable (some might say unconscionable) complexity:
+                    #
+                    # The fundamental loop in which tasks are scheduled lives in SchedulerJob._execute().  Prior to
+                    # jumping into a while True and scheduling forever, the SchedulerJob instantiates a
+                    # DagFileProcessor, which in turn repeatedly opens up a subprocess in which it creates a separate
+                    # SchedulerJob. These secondary SchedulerJobs' role is to process dags from a directory on disk.
+                    # It is these secondary SchedulerJobs that end up running kill_zombies(), and the primary
+                    # SchedulerJob that end up sending tasks to the workers /if it hasn't already done so./
+                    #
+                    # This is why it's not sufficient to modify the executor from within kill_zombies() - it is not the
+                    # same executor as the one from the primary SchedulerJob, and the primary SchedulerJob will not hear
+                    # kill_zombies() scream.
+                    #
+                    # Don't worry, it does get more confusing.  The skeptical programmer may add logging to this method
+                    # (kill_zombies) to inspect the state of the executor, and see that updates to the executor state
+                    # in the primary SchedulerJob find their way into the executor of the secondary SchedulerJobs.
+                    # Well, that's because the subprocess that ends up calling kill_zombies is repeatedly generated, and
+                    # evey time it is created, it inherits the executor from the parent process, with all of the
+                    # updated state that entails.
+                    #
+                    # While it is laudable to separate the work of generating dags from the work of scheduling
+                    # those dags, one could reasonably ask WHY THESE WERE NOT MADE SEPARATE THINGS GIVEN THAT THEY HAVE
+                    # DIFFERENT JOBS AND RUN IN DIFFERENT PROCESSES.
+                    #
+                    # Even having accepted the unknowability of the above, once could still find themselves wondering
+                    # WHY THE SCHEDULING WORK OF IDENTIFYING AND LABELING ZOMBIES IS PERFORMED BY THE PROCESS WHOSE
+                    # RESPONSIBILITY IS THE GENERATION OF DAGS.
+                    #
+                    # Unfortunately, the way this zombie killing responsibility is "designed", the only way to fix
+                    # the problem of the "real SchedulerJob" not knowing that the "dag processing SchedulerJob"
+                    # identified a zombie is to speak through some inter-process channel, which seems a bit like
+                    # buying a jet because your family dentist lives in another country.
+                    #
+                    # Moving the zombie handling to the process that schedules jobs is out of scope for now, but we
+                    # leave the above analysis to save any future poor soul from the unmitigated hell of trying to
+                    # figure out why zombied tasks do not retry.
+                    #
+                    # PS: If you find yourself thinking "no big deal, we can just unset the task from the executor
+                    # in the primary SchedulerJob when the task being examined is UP_FOR_RETRY":
+                    # YOU'RE WRONG - the secondary SchedulerJobs do that work too.
+
                     self.log.info('Marked zombie job %s as failed', ti)
                     Stats.incr(
                         'zombies_killed',
@@ -1092,7 +1152,7 @@ class TaskInstance(Base, LoggingMixin):
         session.commit()
 
     @provide_session
-    def refresh_from_db(self, session=None, lock_for_update=False, include_queue_time=False):
+    def refresh_from_db(self, session=None, lock_for_update=False, include_queue_time=False, include_job_id=False):
         """
         Refreshes the task instance from the database based on the primary key
 
@@ -1121,6 +1181,8 @@ class TaskInstance(Base, LoggingMixin):
             self.pid = ti.pid
             if include_queue_time:
                 self.queued_dttm = ti.queued_dttm
+            if include_job_id:
+                self.job_id = ti.job_id
         else:
             self.state = None
 
@@ -1601,15 +1663,21 @@ class TaskInstance(Base, LoggingMixin):
                     ],
                 )
             self.refresh_from_db(lock_for_update=True)
+            self.hostname = None
             self.state = State.SUCCESS
         except AirflowSkipException:
             self.refresh_from_db(lock_for_update=True)
             self.state = State.SKIPPED
+            self.hostname = None
         except AirflowException as e:
             self.refresh_from_db()
             # for case when task is marked as success externally
             # current behavior doesn't hit the success callback
             if self.state == State.SUCCESS:
+                self.refresh_from_db(lock_for_update=True)
+                self.hostname = None
+                session.merge(self)
+                session.commit()
                 return
             else:
                 self.handle_failure(e, test_mode, context)
@@ -1624,6 +1692,7 @@ class TaskInstance(Base, LoggingMixin):
         if not test_mode:
             session.add(Log(self.state, self))
             session.merge(self)
+        self.hostname = None
         session.commit()
 
         # Success callback
@@ -1681,6 +1750,7 @@ class TaskInstance(Base, LoggingMixin):
         self.log.exception(error)
         task = self.task
         self.end_date = datetime.utcnow()
+        self.hostname = None
         self.set_duration()
         Stats.incr(
             'operator_failures_{}'.format(task.__class__.__name__),
