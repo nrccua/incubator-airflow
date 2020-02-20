@@ -432,6 +432,11 @@ class KubernetesJobOperator(BaseOperator):
             },
             'spec': {
                 'template': {
+                    'metadata': {
+                        'annotations': {
+                            'cluster-autoscaler.kubernetes.io/safe-to-evict': 'false'
+                        }
+                    },
                     'spec': {
                         'containers': instance_containers,
                         'volumes': instance_volumes,
