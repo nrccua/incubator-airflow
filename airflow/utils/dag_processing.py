@@ -45,6 +45,15 @@ class SimpleDag(BaseDag):
         """
         self._dag_id = dag.dag_id
         self._task_ids = [task.task_id for task in dag.tasks]
+
+        self._task_id_to_operator = {
+            task_id: operator for (
+                task_id, operator
+            ) in [
+                (
+                    task.task_id, task.__class__.__name__
+                ) for task in dag.tasks
+            ]}
         self._full_filepath = dag.full_filepath
         self._is_paused = dag.is_paused
         self._concurrency = dag.concurrency
