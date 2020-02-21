@@ -1212,7 +1212,7 @@ class SchedulerJob(BaseJob):
 
     @provide_session
     def _change_state_for_executable_task_instances(self, task_instances,
-                                                    acceptable_states, session=None):
+                                                    acceptable_states, simple_dag_bag=None, session=None):
         """
         Changes the state of task instances in the list with one of the given states
         to QUEUED atomically, and returns the TIs changed.
@@ -1256,6 +1256,12 @@ class SchedulerJob(BaseJob):
         # set TIs to queued state
         for task_instance in tis_to_set_to_queued:
             task_instance.state = State.QUEUED
+            if simple_dag_bag is not None:
+                task_instance.operator = simple_dag_bag.get_dag(
+                    task_instance.dag_id
+                )._task_id_to_operator[
+                    task_instance.task_id
+                ]
             task_instance.queued_dttm = (datetime.utcnow()
                                          if not task_instance.queued_dttm
                                          else task_instance.queued_dttm)
@@ -1357,6 +1363,7 @@ class SchedulerJob(BaseJob):
             tis_with_state_changed = self._change_state_for_executable_task_instances(
                 executable_tis,
                 states,
+                simple_dag_bag=simple_dag_bag,
                 session=session)
             self._enqueue_task_instances_with_queued_state(
                 simple_dag_bag,
@@ -1372,6 +1379,7 @@ class SchedulerJob(BaseJob):
                 tis_with_state_changed = self._change_state_for_executable_task_instances(
                     chunk,
                     states,
+                    simple_dag_bag=simple_dag_bag,
                     session=session)
                 self._enqueue_task_instances_with_queued_state(
                     simple_dag_bag,
