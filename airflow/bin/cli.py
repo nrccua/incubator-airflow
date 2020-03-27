@@ -759,7 +759,7 @@ def restart_workers(gunicorn_master_proc, num_workers_expected):
 
 def webserver(args):
     print(settings.HEADER)
-
+    raise Exception(settings.SQL_ALCHEMY_CONN)
     app = cached_app(conf)
     access_logfile = args.access_logfile or conf.get('webserver', 'access_logfile')
     error_logfile = args.error_logfile or conf.get('webserver', 'error_logfile')
