@@ -71,6 +71,7 @@ if conf.getboolean('scheduler', 'statsd_on'):
         cls_name = conf.get('scheduler', 'statsd_class')
         if cls_name == 'datadog.dogstatsd.DogStatsd':
             from airflow.contrib.utils.dogstatsd_adapter import DogStatsdAdapter
+
             Stats = DogStatsdAdapter(
                 host=conf.get('scheduler', 'statsd_host'),
                 port=conf.getint('scheduler', 'statsd_port'),
@@ -170,6 +171,8 @@ def configure_orm(disable_connection_pool=False):
         engine_args['pool_recycle'] = conf.getint('core',
                                                   'SQL_ALCHEMY_POOL_RECYCLE')
 
+        engine_args['connect_args'] = {'ssl': {'ca': '/mysql-sslcert/server-ca', 'cert': '/mysql-sslcert/client-cert',
+                                               'key': '/mysql-sslcert/client-key'}}
     engine = create_engine(SQL_ALCHEMY_CONN, **engine_args)
     Session = scoped_session(
         sessionmaker(autocommit=False, autoflush=False, bind=engine))
