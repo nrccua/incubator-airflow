@@ -175,6 +175,7 @@ def evaluate_xcoms(source, task_instance, context=None):
         raise ValueError("Provided task_instance object does have the xcom_pull method")
 
     if isinstance(source, (basestring, bool, int, long, float)):
+        logging.error("returning source bc basestring, bool, int, long, float")
         return source
     elif isinstance(source, XComParameter):
         logging.error("XComParameter is instance")
@@ -183,7 +184,7 @@ def evaluate_xcoms(source, task_instance, context=None):
         logging.error("source has keys")
         retval = {}
         for k, v in source.items():
-            logging.error("enumerating source")
+            logging.error("evaluating source")
             retval[k] = evaluate_xcoms(v, task_instance, context)
             logging.error("retval[{}] is {}".format(k, retval[k]))
         logging.error("retval is {}".format(retval))
