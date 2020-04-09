@@ -8,6 +8,7 @@ from airflow.utils.decorators import apply_defaults
 from airflow.contrib.utils.kubernetes_utils import uniquify_job_name
 from airflow.contrib.utils.xcom import try_xcom_pull
 from datetime import datetime
+import collections
 
 try:
     import ujson as json
@@ -79,6 +80,7 @@ class AppEngineOperator(BaseOperator):
 def check_gcs_file_exists(file_name, google_cloud_conn_id, bucket):
     hook = GoogleCloudStorageHook(google_cloud_storage_conn_id=google_cloud_conn_id)
     return hook.exists(bucket, file_name)
+
 
 # TODO Test schedule job works and fails
 # TODO test find success file -> succeeds
@@ -172,6 +174,18 @@ class AppEngineOperatorSync(BaseOperator):
                     body = response.content
 
                 self.xcom_push(context=context, key=XCOM_RETURN_KEY, value=body)
+
+
+# thank you stack overflow
+def convert(data):
+    if isinstance(data, basestring):
+        return str(data)
+    elif isinstance(data, collections.Mapping):
+        return dict(map(convert, data.items()))
+    elif isinstance(data, collections.Iterable):
+        return type(data)(map(convert, data))
+    else:
+        return data
 
 
 class AppEngineOperatorAsync(BaseOperator):
@@ -300,6 +314,7 @@ class AppEngineOperatorAsync(BaseOperator):
 
         logging.error("command params are {}".format(self.command_params))
         logging.error("context is {}".format(context))
+        self.command_params = convert(self.command_params)
         instance_params = evaluate_xcoms(self.command_params, self, context)
         logging.error("instance params are {}".format(instance_params))
 
@@ -360,7 +375,7 @@ class AppEngineOperatorAsync(BaseOperator):
                 if not retval_tuple[0]:
                     logging.info("XCom response not found. Sleeping.")
                     # sleep for a while and try again
-                    time.sleep(min(60, 2**i))
+                    time.sleep(min(60, 2 ** i))
                     i += 1
                     continue
                 logging.info("XCom response received: %s" % str(retval))

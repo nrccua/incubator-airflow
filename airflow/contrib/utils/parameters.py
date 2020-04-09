@@ -131,7 +131,7 @@ def enumerate_parameters(source, task_instance, context=None):
                 yield v
     elif isinstance(source, SerializeMe):
         yield json.dumps(evaluate_xcoms(source.parameter_object, task_instance, context))
-    elif hasattr(source, "iterkeys"):
+    elif hasattr(source, "keys"):
         for k, v in enumerate_parameter_dict(source, task_instance, context=context):
             if v is not None:
                 yield k
