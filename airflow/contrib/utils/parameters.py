@@ -179,8 +179,8 @@ def evaluate_xcoms(source, task_instance, context=None):
     elif isinstance(source, XComParameter):
         logging.error("XComParameter is instance")
         return source.get_value(task_instance, context)
-    elif hasattr(source, "iterkeys"):
-        logging.error("source has iterkeys")
+    elif hasattr(source, "keys"):
+        logging.error("source has keys")
         retval = {}
         for k, v in source.items():
             logging.error("enumerating source")
