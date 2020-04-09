@@ -175,6 +175,12 @@ def evaluate_xcoms(source, task_instance, context=None):
         raise ValueError("Provided task_instance object does have the xcom_pull method")
 
     if isinstance(source, (basestring, bool, int, long, float)):
+        if 'XComParameter' in source:
+            try:
+                eval(source)
+                evaluate_xcoms(source, task_instance, context)
+            except Exception as e:
+                logging.error(e)
         logging.error("returning source bc basestring, bool, int, long, float")
         return source
     elif isinstance(source, XComParameter):
