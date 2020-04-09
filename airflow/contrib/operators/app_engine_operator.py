@@ -292,12 +292,16 @@ class AppEngineOperatorAsync(BaseOperator):
         mysql_cloudsql_instance = safe_config_get('mysql', 'cloudsql_instance')
         if mysql_cloudsql_instance is not None:
             headers['X-Airflow-Mysql-Cloudsql-Instance'] = mysql_cloudsql_instance
+            headers['X-Airflow-Mysql-Cloudsql-Instance'] = mysql_cloudsql_instance
 
         # generate a unique job name for the command to be added to the App Engine task queue
         job_id = uniquify_job_name(self, context)
         logging.info("Job ID: %s", job_id)
 
+        logging.error("command params are {}".format(self.command_params))
+        logging.error("context is {}".format(context))
         instance_params = evaluate_xcoms(self.command_params, self, context)
+        logging.error("instance params are {}".format(instance_params))
 
         post_data = {'params_dict': instance_params, 'appengine_queue': self.appengine_queue, 'job_id': job_id,
                      'try_number': try_number}

@@ -1,5 +1,5 @@
 from __future__ import absolute_import
-
+import logging
 from airflow.models import BaseOperator
 try:
     import ujson as json
@@ -177,11 +177,16 @@ def evaluate_xcoms(source, task_instance, context=None):
     if isinstance(source, (basestring, bool, int, long, float)):
         return source
     elif isinstance(source, XComParameter):
+        logging.error("XComParameter is instance")
         return source.get_value(task_instance, context)
     elif hasattr(source, "iterkeys"):
+        logging.error("source has iterkeys")
         retval = {}
-        for k, v in source.iteritems():
+        for k, v in source.items():
+            logging.error("enumerating source")
             retval[k] = evaluate_xcoms(v, task_instance, context)
+            logging.error("retval[{}] is {}".format(k, retval[k]))
+        logging.error("retval is {}".format(retval))
         return retval
     elif hasattr(source, "__iter__"):
         return [evaluate_xcoms(x, task_instance, context) for x in source]
