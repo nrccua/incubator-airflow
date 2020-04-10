@@ -209,14 +209,14 @@ class AppEngineOperatorAsync(BaseOperator):
     :param kwargs: Named parameters to pass to BaseOperator constructor
     :type kwargs: dict
     """
-    template_fields = ('command_name', 'command_params')
+    template_fields = ('command_name')
 
     @apply_defaults
     def __init__(self,
                  task_id,
                  command_name,
                  appengine_queue,
-                 command_params={},
+                 command_params=None,
                  http_conn_id='appengine',
                  appengine_timeout=3600,
                  **kwargs):
@@ -224,7 +224,7 @@ class AppEngineOperatorAsync(BaseOperator):
         self.http_conn_id = http_conn_id
         self.appengine_timeout = appengine_timeout
         self.command_name = command_name
-        self.command_params = command_params
+        self.command_params = command_params or {}
         self.appengine_queue = appengine_queue
         self.should_adopt = False
         self.finished = False
