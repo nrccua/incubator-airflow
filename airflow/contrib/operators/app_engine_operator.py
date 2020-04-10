@@ -150,9 +150,6 @@ class AppEngineOperatorSync(BaseOperator):
         if mysql_cloudsql_instance is not None:
             headers['X-Airflow-Mysql-Cloudsql-Instance'] = mysql_cloudsql_instance
 
-        test_params = evaluate_xcoms(self.command_params, self, context)
-        logging.error("testing params {}".format(test_params))
-        testing_dict_params = enumerate_parameter_dict(self.command_params, self, context)
         instance_params = enumerate_parameters(self.command_params, self, context)
 
         # this will throw on any 4xx or 5xx
@@ -322,11 +319,17 @@ class AppEngineOperatorAsync(BaseOperator):
         instance_params = evaluate_xcoms(self.command_params, self, context)
         logging.error("instance params are {}".format(instance_params))
 
-        test_params = evaluate_xcoms(self.command_params, self, context)
-        logging.error("testing params {}".format(test_params))
-        testing_dict_params = enumerate_parameter_dict(self.command_params, self, context)
-        logging.error("testing dict params are {}".format(testing_dict_params))
-        instance_params = enumerate_parameters(self.command_params, self, context)
+        try:
+            test_params = evaluate_xcoms(self.command_params, self, context)
+            logging.error("testing params {}".format(test_params))
+        except Exception as e:
+            logging.error(e)
+
+        try:
+            enum_params = enumerate_parameters(self.command_params, self, context)
+            logging.info("enum params are {}".format(enum_params))
+        except Exception as e:
+            logging.error(e)
 
         post_data = {'params_dict': instance_params, 'appengine_queue': self.appengine_queue, 'job_id': job_id,
                      'try_number': try_number}
