@@ -189,6 +189,8 @@ def evaluate_xcoms(source, task_instance, context=None):
             if hasattr(v, "keys"):
                 if v['xcom']:
                     new_val = XComParameter(task_ids=v['xcom']).get_values(task_instance, context)
+                    if isinstance(new_val, list):
+                        new_val = new_val[0]
                     logging.error("evaluated xcom: new val is {}".format(new_val))
                     retval[k] = evaluate_xcoms(new_val, task_instance, context)
             else:
