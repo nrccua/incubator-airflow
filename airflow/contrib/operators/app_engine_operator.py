@@ -124,13 +124,13 @@ class AppEngineOperatorSync(BaseOperator):
     def __init__(self,
                  task_id,
                  command_name,
-                 command_params={},
+                 command_params=None,
                  http_conn_id='appengine',
                  **kwargs):
         super(AppEngineOperatorSync, self).__init__(task_id=task_id, **kwargs)
         self.http_conn_id = http_conn_id
         self.command_name = command_name
-        self.command_params = command_params
+        self.command_params = command_params or {}
 
     def execute(self, context):
         hook = HttpHook(method='POST', http_conn_id=self.http_conn_id)
