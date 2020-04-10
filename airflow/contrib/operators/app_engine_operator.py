@@ -318,6 +318,7 @@ class AppEngineOperatorAsync(BaseOperator):
         logging.error("command params are {}".format(self.command_params))
         logging.error("context is {}".format(context))
         self.command_params = convert(self.command_params)
+
         instance_params = evaluate_xcoms(self.command_params, self, context)
         logging.error("instance params are {}".format(instance_params))
 

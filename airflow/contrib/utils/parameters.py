@@ -193,8 +193,14 @@ def evaluate_xcoms(source, task_instance, context=None):
         retval = {}
         for k, v in source.items():
             logging.error("evaluating source")
-            retval[k] = evaluate_xcoms(v, task_instance, context)
-            logging.error("retval[{}] is {}".format(k, retval[k]))
+            if hasattr(v, "keys"):
+                if v['xcom']:
+                    new_val = XComParameter(task_ids=v['xcom']).get_values(task_instance, context)
+                    logging.error("evaluated xcom: new val is {}".format(new_val))
+                    retval[k] = evaluate_xcoms(new_val, task_instance, context)
+            else:
+                retval[k] = evaluate_xcoms(v, task_instance, context)
+                logging.error("retval[{}] is {}".format(k, retval[k]))
         logging.error("retval is {}".format(retval))
         return retval
     elif hasattr(source, "__iter__"):
