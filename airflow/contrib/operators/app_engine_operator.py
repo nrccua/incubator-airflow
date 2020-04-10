@@ -321,6 +321,12 @@ class AppEngineOperatorAsync(BaseOperator):
         instance_params = evaluate_xcoms(self.command_params, self, context)
         logging.error("instance params are {}".format(instance_params))
 
+        test_params = evaluate_xcoms(self.command_params, self, context)
+        logging.error("testing params {}".format(test_params))
+        testing_dict_params = enumerate_parameter_dict(self.command_params, self, context)
+        logging.error("testing dict params are {}".format(testing_dict_params))
+        instance_params = enumerate_parameters(self.command_params, self, context)
+
         post_data = {'params_dict': instance_params, 'appengine_queue': self.appengine_queue, 'job_id': job_id,
                      'try_number': try_number}
 
