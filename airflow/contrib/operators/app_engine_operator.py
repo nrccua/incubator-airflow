@@ -1,6 +1,6 @@
 from airflow import configuration
 from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
-from airflow.contrib.utils.parameters import evaluate_xcoms
+from airflow.contrib.utils.parameters import evaluate_xcoms, enumerate_parameters, enumerate_parameter_dict
 from airflow.exceptions import AirflowException, AirflowTaskTimeout, AirflowConfigException
 from airflow.hooks.http_hook import HttpHook
 from airflow.models import BaseOperator, XCOM_RETURN_KEY, TaskInstance
@@ -150,7 +150,10 @@ class AppEngineOperatorSync(BaseOperator):
         if mysql_cloudsql_instance is not None:
             headers['X-Airflow-Mysql-Cloudsql-Instance'] = mysql_cloudsql_instance
 
-        instance_params = evaluate_xcoms(self.command_params, self, context)
+        test_params = evaluate_xcoms(self.command_params, self, context)
+        logging.error("testing params {}".format(test_params))
+        testing_dict_params = enumerate_parameter_dict(self.command_params, self, context)
+        instance_params = enumerate_parameters(self.command_params, self, context)
 
         # this will throw on any 4xx or 5xx
         with hook.run(

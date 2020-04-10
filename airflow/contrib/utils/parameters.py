@@ -1,5 +1,6 @@
 from __future__ import absolute_import
 import logging
+import sys
 from airflow.models import BaseOperator
 try:
     import ujson as json
@@ -179,7 +180,7 @@ def evaluate_xcoms(source, task_instance, context=None):
             logging.error("found XComParameter string in source.")
             try:
                 logging.error("eval(source) is {}".format(eval(source)))
-                evaluate_xcoms(eval(source), task_instance, context)
+                evaluate_xcoms(getattr(sys.modules[__name__]), task_instance, context)
             except Exception as e:
                 logging.error(e)
         logging.error("returning source bc basestring, bool, int, long, float")
