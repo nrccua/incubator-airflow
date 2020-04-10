@@ -20,7 +20,6 @@ import yaml
 
 class AppEngineOperator(BaseOperator):
     template_fields = (
-        'command_params',
         'job_id',
     )
 
@@ -29,15 +28,15 @@ class AppEngineOperator(BaseOperator):
                  task_id,
                  http_conn_id,
                  bucket,
-                 command_params,
                  job_id,
+                 command_params=None,
                  google_cloud_conn_id='google_cloud_storage_default',
                  **kwargs):
         super(AppEngineOperator, self).__init__(task_id=task_id, **kwargs)
         self.http_conn_id = http_conn_id
         self.bucket = bucket
         command_params['job_id'] = job_id
-        self.command_params = command_params
+        self.command_params = command_params or {}
         self.job_id = job_id
         self.google_cloud_conn_id = google_cloud_conn_id
 
