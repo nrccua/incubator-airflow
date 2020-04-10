@@ -117,7 +117,7 @@ class AppEngineOperatorSync(BaseOperator):
     :param kwargs: Named parameters to pass to BaseOperator constructor
     :type kwargs: dict
     """
-    template_fields = ('command_name')
+    template_fields = ('command_name',)
 
     @apply_defaults
     def __init__(self,
@@ -208,7 +208,7 @@ class AppEngineOperatorAsync(BaseOperator):
     :param kwargs: Named parameters to pass to BaseOperator constructor
     :type kwargs: dict
     """
-    template_fields = ('command_name')
+    template_fields = ('command_name',)
 
     @apply_defaults
     def __init__(self,
