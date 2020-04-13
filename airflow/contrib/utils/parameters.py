@@ -1,6 +1,6 @@
 from __future__ import absolute_import
-
 from airflow.models import BaseOperator
+
 try:
     import ujson as json
 except ImportError:
@@ -16,6 +16,7 @@ class XComParameter(object):
     will be sent... somehow to be determined later. Options include delimited
     GET params, multiple GET params, or POST body.
     """
+
     def __init__(self, task_ids, xcom_key='return_value'):
         """
         Makes a new XComParameter
@@ -78,6 +79,7 @@ class SerializeMe(object):
     This means that the image expecting to receive this command line argument should then
     deserialize.
     """
+
     def __init__(self, parameter_object):
         """
         Makes a new SerializeMe object
@@ -96,7 +98,7 @@ def enumerate_parameter_dict(source_dict, task_instance, context=None):
                     yield (key, '{}={}'.format(inner_key, iiv))
         elif hasattr(value, '__iter__') and not isinstance(value, basestring):
             for v in value:
-                yield(key, v)
+                yield (key, v)
         elif isinstance(value, XComParameter):
             for v in value.get_values(task_instance, context=context):
                 if v is not None:
@@ -173,7 +175,6 @@ def evaluate_xcoms(source, task_instance, context=None):
 
     if task_instance and not hasattr(task_instance, 'xcom_pull'):
         raise ValueError("Provided task_instance object does have the xcom_pull method")
-
     if isinstance(source, (basestring, bool, int, long, float)):
         return source
     elif isinstance(source, XComParameter):
@@ -185,5 +186,7 @@ def evaluate_xcoms(source, task_instance, context=None):
         return retval
     elif hasattr(source, "__iter__"):
         return [evaluate_xcoms(x, task_instance, context) for x in source]
+    elif callable(source):
+        return source(task_instance, context)
     else:
         return source
