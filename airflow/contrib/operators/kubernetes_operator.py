@@ -95,7 +95,6 @@ class KubernetesJobOperator(BaseOperator):
         self.sleep_seconds_between_polling = sleep_seconds_between_polling
 
         # TODO: dangermike (2018-05-22) get this from... somewhere else
-        self.cloudsql_instance_creds = 'airflow-cloudsql-instance-credentials'
         self.cloudsql_db_creds = 'airflow-cloudsql-db-credentials'
 
         self.cloudsql_connections = (cloudsql_connections or [])
@@ -441,7 +440,7 @@ class KubernetesJobOperator(BaseOperator):
                 #         {'key': 'client-cert', 'path': configuration.get('cloudsql', 'ssl_cert_path')},
                 #     ]
                 # }}
-            ])
+            #])
 
        # if self.cloudsql_connections:
         cloudsql_proxy_container, cloudsql_proxy_volume = self.create_cloudsql_proxy(instance_env)
@@ -517,15 +516,15 @@ class KubernetesJobOperator(BaseOperator):
             }],
             'volumeMounts': [{
                 'mountPath': '/secrets/airflowcloudsql',
-                'name': self.cloudsql_instance_creds,
+                'name': 'airflow-cloudsql-instance-credentials',
                 'readOnly': True
             }]
         }
 
         cloudsql_proxy_volume = [{
-            'name': self.cloudsql_instance_creds,
+            'name': 'airflow-cloudsql-instance-credentials',
             'secret': {
-                'secretName': self.cloudsql_instance_creds
+                'secretName': 'airflow-cloudsql-instance-credentials'
             }
         }]
         return cloudsql_proxy_instance_container, cloudsql_proxy_volume
