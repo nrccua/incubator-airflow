@@ -483,7 +483,7 @@ class KubernetesJobOperator(BaseOperator):
                 'backoffLimit': 0,
             },
         }
-
+        logging.error("created yaml {}".format(yaml.safe_dump(kub_job_dict)))
         return unique_job_name, yaml.safe_dump(kub_job_dict)
 
     def create_cloudsql_proxy(self, instance_env):
@@ -523,12 +523,12 @@ class KubernetesJobOperator(BaseOperator):
                 'secretName': self.cloudsql_instance_creds
             }
         }]
-
         return cloudsql_proxy_instance_container, cloudsql_proxy_volume
 
 
 @provide_session
 def execute(self, context, session=None):
+    logging.error('inside execute. context is {}'.format(context))
     if self.die_if_duplicate:
 
         current_task_instance = TaskInstance(self,

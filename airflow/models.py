@@ -1616,6 +1616,7 @@ class TaskInstance(Base, LoggingMixin):
                         task_copy.on_kill()
                         raise
                 else:
+                    logging.error('copying task, execute with context {}'.format(context))
                     result = task_copy.execute(context=context)
 
                 # If the task returns a result, push an XCom containing it
