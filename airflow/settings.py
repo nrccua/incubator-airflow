@@ -170,7 +170,7 @@ def configure_orm(disable_connection_pool=False):
         engine_args['pool_size'] = conf.getint('core', 'SQL_ALCHEMY_POOL_SIZE')
         engine_args['pool_recycle'] = conf.getint('core',
                                                   'SQL_ALCHEMY_POOL_RECYCLE')
-    if conf.get('mysql', 'ssl_cert_path'):
+    if '10.2.32.14' in SQL_ALCHEMY_CONN:
         logging.error("adding ssl params")
         engine_args['connect_args'] = {'ssl': {'ca': '/mysql-sslcert/server-ca', 'cert': '/mysql-sslcert/client-cert',
                                               'key': '/mysql-sslcert/client-key'}}
