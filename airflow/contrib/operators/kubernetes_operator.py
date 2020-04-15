@@ -352,6 +352,7 @@ class KubernetesJobOperator(BaseOperator):
             'core', 'enable_xcom_pickling')
         instance_env['KUBERNETES_JOB_NAME'] = unique_job_name
         instance_env['AIRFLOW_MYSQL_HOST'] = configuration.get('mysql', 'host')
+        logging.error("mysql host is {}".format(configuration.get('mysql', 'host')))
         instance_env['AIRFLOW_MYSQL_DB'] = configuration.get('mysql', 'db')
         instance_env['AIRFLOW_MYSQL_USERNAME'] = KubernetesSecretParameter(
             secret_key_name='airflow-cloudsql-db-credentials',
