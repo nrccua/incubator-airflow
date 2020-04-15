@@ -337,7 +337,6 @@ class KubernetesJobOperator(BaseOperator):
         #
         logging.error('creating job yaml')
         unique_job_name = uniquify_job_name(self, context)
-        instance_volumes = []
 
         # Copy the environment variables from the task and evaluate any XComs
         # Add in the AIRFLOW_xxx vars we need to support XComs from within the container
@@ -445,7 +444,7 @@ class KubernetesJobOperator(BaseOperator):
        # if self.cloudsql_connections:
         cloudsql_proxy_container, cloudsql_proxy_volume = self.create_cloudsql_proxy(instance_env)
         instance_containers.append(cloudsql_proxy_container)
-        instance_volumes.append(cloudsql_proxy_volume)
+        instance_volumes = [cloudsql_proxy_volume]
 
         if self.service_account_secret_name is not None:
             instance_volumes.append({
