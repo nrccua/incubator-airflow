@@ -353,8 +353,9 @@ class KubernetesJobOperator(BaseOperator):
             'AIRFLOW_ENABLE_XCOM_PICKLING'] = configuration.getboolean(
             'core', 'enable_xcom_pickling')
         instance_env['KUBERNETES_JOB_NAME'] = unique_job_name
-        instance_env['AIRFLOW_MYSQL_HOST'] = configuration.get('mysql', 'host')
-        logging.error("mysql host is {}".format(configuration.get('mysql', 'host')))
+        instance_env['AIRFLOW_MYSQL_HOST'] = '127.0.0.1'
+        #configuration.get('mysql', 'host')
+        #logging.error("mysql host is {}".format(configuration.get('mysql', 'host')))
         instance_env['AIRFLOW_MYSQL_DB'] = configuration.get('mysql', 'db')
         instance_env['AIRFLOW_MYSQL_USERNAME'] = KubernetesSecretParameter(
             secret_key_name='airflow-cloudsql-db-credentials',
@@ -362,9 +363,9 @@ class KubernetesJobOperator(BaseOperator):
         instance_env['AIRFLOW_MYSQL_PASSWORD'] = KubernetesSecretParameter(
             secret_key_name='airflow-cloudsql-db-credentials',
             secret_key_key='password')
-        instance_env['AIRFLOW_MYSQL_SSL_CERT_PATH'] = configuration.get('mysql', 'ssl_cert_path')
-        instance_env['AIRFLOW_MYSQL_SSL_KEY_PATH'] = configuration.get('mysql', 'ssl_key_path')
-        instance_env['AIRFLOW_MYSQL_SSL_CA_PATH'] = configuration.get('mysql', 'ssl_ca_path')
+        # instance_env['AIRFLOW_MYSQL_SSL_CERT_PATH'] = configuration.get('mysql', 'ssl_cert_path')
+        # instance_env['AIRFLOW_MYSQL_SSL_KEY_PATH'] = configuration.get('mysql', 'ssl_key_path')
+        # instance_env['AIRFLOW_MYSQL_SSL_CA_PATH'] = configuration.get('mysql', 'ssl_ca_path')
         if self.service_account_secret_name is not None:
             instance_env[
                 'GOOGLE_APPLICATION_CREDENTIALS'] = '/%s/key.json' % self.service_account_secret_name
@@ -431,19 +432,21 @@ class KubernetesJobOperator(BaseOperator):
                 'secret': {
                     'secretName': 'airflow-cloudsql-instance-credentials'
                 }
-            }, {'name': 'mysql-sslcert',
-                'secret': {
-                    'secretName': configuration.get('cloudsql', 'ssl_secret'), 'items': [
-                        {'key': 'server-ca', 'path': configuration.get('cloudsql', 'ssl_ca_path')},
-                        {'key': 'client-key', 'path': configuration.get('cloudsql', 'ssl_key_path')},
-                        {'key': 'client-cert', 'path': configuration.get('cloudsql', 'ssl_cert_path')},
-                    ]
-                }}])
+            },
+                # {'name': 'mysql-sslcert',
+                # 'secret': {
+                #     'secretName': configuration.get('cloudsql', 'ssl_secret'), 'items': [
+                #         {'key': 'server-ca', 'path': configuration.get('cloudsql', 'ssl_ca_path')},
+                #         {'key': 'client-key', 'path': configuration.get('cloudsql', 'ssl_key_path')},
+                #         {'key': 'client-cert', 'path': configuration.get('cloudsql', 'ssl_cert_path')},
+                #     ]
+                # }}
+            ])
 
-        if self.cloudsql_connections:
-            cloudsql_proxy_container, cloudsql_proxy_volume = self.create_cloudsql_proxy(instance_env)
-            instance_containers.append(cloudsql_proxy_container)
-            instance_volumes.append(cloudsql_proxy_volume)
+       # if self.cloudsql_connections:
+        cloudsql_proxy_container, cloudsql_proxy_volume = self.create_cloudsql_proxy(instance_env)
+        instance_containers.append(cloudsql_proxy_container)
+        instance_volumes.append(cloudsql_proxy_volume)
 
         if self.service_account_secret_name is not None:
             instance_volumes.append({
@@ -489,8 +492,8 @@ class KubernetesJobOperator(BaseOperator):
         return unique_job_name, yaml.safe_dump(kub_job_dict)
 
     def create_cloudsql_proxy(self, instance_env):
-        cs_conns = []
-        port = 3306
+        cs_conns = [(configuration.get('mysql', 'cloudsql_instance'), 3306)]
+        port = 3307
 
         for cs_conn in self.cloudsql_connections:
             cs_conns.append((cs_conn.fully_qualified_instance, port))
