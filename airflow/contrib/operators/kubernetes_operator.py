@@ -423,16 +423,16 @@ class KubernetesJobOperator(BaseOperator):
                     })
 
             # add the cloudsql instance volume/volumeMounts
-            cs['volumeMounts'].append({
-                'name': 'mysql-sslcert',
-                'mountPath': configuration.get('cloudsql', 'ssl_root_path')
-            })
-            instance_volumes.append([{
-                'name': 'airflow-cloudsql-instance-credentials',
-                'secret': {
-                    'secretName': 'airflow-cloudsql-instance-credentials'
-                }
-            },
+            # cs['volumeMounts'].append({
+            #     'name': 'mysql-sslcert',
+            #     'mountPath': configuration.get('cloudsql', 'ssl_root_path')
+            # })
+            # instance_volumes.append([{
+            #     'name': 'airflow-cloudsql-instance-credentials',
+            #     'secret': {
+            #         'secretName': 'airflow-cloudsql-instance-credentials'
+            #     }
+            # },
                 # {'name': 'mysql-sslcert',
                 # 'secret': {
                 #     'secretName': configuration.get('cloudsql', 'ssl_secret'), 'items': [
