@@ -96,7 +96,6 @@ class KubernetesJobOperator(BaseOperator):
 
         # TODO: dangermike (2018-05-22) get this from... somewhere else
         self.cloudsql_instance_creds = 'airflow-cloudsql-instance-credentials'
-        self.cloudsql_db_creds = 'airflow-cloudsql-db-credentials'
 
         self.cloudsql_connections = (cloudsql_connections or [])
 
@@ -487,13 +486,13 @@ class KubernetesJobOperator(BaseOperator):
         return unique_job_name, yaml.safe_dump(kub_job_dict)
 
     def create_cloudsql_proxy(self, instance_env):
-        cs_conns = [(configuration.get('mysql', 'cloudsql_instance'), 3306)]
-        cs_next_port = 3307
+        cs_conns = []
+        port = 3306
 
         for cs_conn in self.cloudsql_connections:
-            cs_conns.append((cs_conn.fully_qualified_instance, cs_next_port))
-            instance_env[cs_conn.port_key] = cs_next_port
-            cs_next_port += 1
+            cs_conns.append((cs_conn.fully_qualified_instance, port))
+            instance_env[cs_conn.port_key] = port
+            port += 1
 
         cloudsql_proxy_instance_container = {
             'image':
@@ -518,9 +517,9 @@ class KubernetesJobOperator(BaseOperator):
         }
 
         cloudsql_proxy_volume = [{
-            'name': 'airflow-cloudsql-instance-credentials',
+            'name': self.cloudsql_instance_creds,
             'secret': {
-                'secretName': 'airflow-cloudsql-instance-credentials'
+                'secretName': self.cloudsql_instance_creds
             }
         }]
 
