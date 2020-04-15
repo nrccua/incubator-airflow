@@ -338,7 +338,7 @@ class KubernetesJobOperator(BaseOperator):
         #
         logging.error('creating job yaml')
         unique_job_name = uniquify_job_name(self, context)
-        instance_volumes = {}
+        instance_volumes = []
 
         # Copy the environment variables from the task and evaluate any XComs
         # Add in the AIRFLOW_xxx vars we need to support XComs from within the container
