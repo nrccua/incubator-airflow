@@ -96,6 +96,7 @@ class KubernetesJobOperator(BaseOperator):
 
         # TODO: dangermike (2018-05-22) get this from... somewhere else
         self.cloudsql_instance_creds = 'airflow-cloudsql-instance-credentials'
+        self.cloudsql_db_creds = 'airflow-cloudsql-db-credentials'
 
         self.cloudsql_connections = (cloudsql_connections or [])
 
