@@ -487,8 +487,8 @@ class KubernetesJobOperator(BaseOperator):
         return unique_job_name, yaml.safe_dump(kub_job_dict)
 
     def create_cloudsql_proxy(self, instance_env):
-        cs_conns = []
-        port = 3306
+        cs_conns = [[(configuration.get('mysql', 'cloudsql_instance'), 3306)]]
+        port = 3307
 
         for cs_conn in self.cloudsql_connections:
             cs_conns.append((cs_conn.fully_qualified_instance, port))
