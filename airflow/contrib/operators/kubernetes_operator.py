@@ -20,7 +20,7 @@ from airflow.contrib.utils.kubernetes_utils import retryable_check_output
 
 
 class KubernetesJobOperator(BaseOperator):
-    template_fields = ('service_account_secret_name', )
+    template_fields = ('service_account_secret_name',)
 
     def __init__(self,
                  job_name,
@@ -181,8 +181,8 @@ class KubernetesJobOperator(BaseOperator):
         return json.loads(
             retryable_check_output(
                 args=namespaced_kubectl() +
-                ['get', 'pods', '-o', 'json', '-l',
-                 'job-name==%s' % job_name]))
+                     ['get', 'pods', '-o', 'json', '-l',
+                      'job-name==%s' % job_name]))
 
     def log_container_logs(self, job_name, pod_output=None):
         """
@@ -205,7 +205,7 @@ class KubernetesJobOperator(BaseOperator):
                              extra=extra)
                 output = retryable_check_output(
                     args=namespaced_kubectl() +
-                    ['logs', pod_name, container_name])
+                         ['logs', pod_name, container_name])
                 for line in output.splitlines():
                     logging.info(line, extra=extra)
 
@@ -315,7 +315,7 @@ class KubernetesJobOperator(BaseOperator):
                 else:
                     raise Exception(
                         "Encountered pod state {state} - no behavior has been prepared for pods in this state!"
-                        .format(state=pod["status"]["phase"]))
+                            .format(state=pod["status"]["phase"]))
             total_pods = len(pod_output['items'])
             logging.info(
                 "total pods: {total_pods}".format(total_pods=total_pods))
@@ -349,9 +349,9 @@ class KubernetesJobOperator(BaseOperator):
             'execution_date'].isoformat()
         instance_env[
             'AIRFLOW_ENABLE_XCOM_PICKLING'] = configuration.getboolean(
-                'core', 'enable_xcom_pickling')
+            'core', 'enable_xcom_pickling')
         instance_env['KUBERNETES_JOB_NAME'] = unique_job_name
-        instance_env['AIRFLOW_MYSQL_HOST'] = '127.0.0.1'
+        instance_env['AIRFLOW_MYSQL_HOST'] = configuration.get('mysql', 'host')
         instance_env['AIRFLOW_MYSQL_DB'] = configuration.get('mysql', 'db')
         instance_env['AIRFLOW_MYSQL_USERNAME'] = KubernetesSecretParameter(
             secret_key_name='airflow-cloudsql-db-credentials',
@@ -359,6 +359,9 @@ class KubernetesJobOperator(BaseOperator):
         instance_env['AIRFLOW_MYSQL_PASSWORD'] = KubernetesSecretParameter(
             secret_key_name='airflow-cloudsql-db-credentials',
             secret_key_key='password')
+        instance_env['AIRFLOW_MYSQL_SSL_CERT_PATH'] = configuration.get('mysql', 'ssl_full_cert_path')
+        instance_env['AIRFLOW_MYSQL_SSL_KEY_PATH'] = configuration.get('mysql', 'ssl_full_key_path')
+        instance_env['AIRFLOW_MYSQL_SSL_CA_PATH'] = configuration.get('mysql', 'ssl_full_ca_path')
         if self.service_account_secret_name is not None:
             instance_env[
                 'GOOGLE_APPLICATION_CREDENTIALS'] = '/%s/key.json' % self.service_account_secret_name
@@ -369,14 +372,12 @@ class KubernetesJobOperator(BaseOperator):
                 'scheduler', 'statsd_port')
             instance_env['STATSD_PREFIX'] = configuration.get(
                 'scheduler', 'statsd_prefix')
-
-        cs_conns = [(configuration.get('mysql', 'cloudsql_instance'), 3306)]
-        cs_next_port = 3307
-
-        for cs_conn in self.cloudsql_connections:
-            cs_conns.append((cs_conn.fully_qualified_instance, cs_next_port))
-            instance_env[cs_conn.port_key] = cs_next_port
-            cs_next_port += 1
+        if self.cloudsql_connections:
+            cloudsql_proxy_container_instance, cloudsql_proxy_volume_instance = self.create_cloudsql_proxy(instance_env)
+            instance_volumes = [cloudsql_proxy_volume_instance]
+        else:
+            instance_volumes = []
+            cloudsql_proxy_container_instance = None
 
         # Make a copy of all the containers.
         # Expand collections and apply XComs in args and/or command
@@ -411,11 +412,15 @@ class KubernetesJobOperator(BaseOperator):
             cs['env'] = dict_to_env(cs['env'], self, context=context)
 
             cs['volumeMounts'] = cs.get('volumeMounts', [])
+            cs['volumeMounts'].append({
+                'name': 'mysql-sslcert',
+                'mountPath': '/mysql-sslcert',
+            })
             # do we already have the secret mount? if not, we should add it
             if self.service_account_secret_name is not None:
                 if 0 == len([
-                        x for x in cs['volumeMounts']
-                        if self.service_account_secret_name == x.get('name')
+                    x for x in cs['volumeMounts']
+                    if self.service_account_secret_name == x.get('name')
                 ]):
                     cs['volumeMounts'].append({
                         'name': self.service_account_secret_name,
@@ -423,12 +428,77 @@ class KubernetesJobOperator(BaseOperator):
                         'readOnly': True,
                     })
 
-        instance_containers.append({
+
+        if cloudsql_proxy_container_instance:
+            instance_containers.append(cloudsql_proxy_container_instance)
+
+        if self.service_account_secret_name is not None:
+            instance_volumes.append({
+                'name': self.service_account_secret_name,
+                'secret': {
+                    'secretName': self.service_account_secret_name
+                },
+            })
+        sql_secret_name = configuration.get('mysql', 'ssl_secret')
+        instance_volumes.append({'name': 'mysql-sslcert', 'secret': {
+            'secretName': str(sql_secret_name),
+            'items': [
+                {'key': 'server_ca', 'path': 'server-ca'},
+                {'key': 'client_key', 'path': 'client-key'},
+                {'key': 'client_cert',
+                 'path': 'client-cert', }]}})
+
+        skip_names = {v['name'] for v in instance_volumes}
+        for v in self.volumes:
+            if v['name'] not in skip_names:
+                instance_volumes.append(v)
+
+
+        kub_job_dict = {
+            'apiVersion': 'batch/v1',
+            'kind': 'Job',
+            'metadata': {
+                'name':
+                    unique_job_name,
+                'namespace':
+                    'airflow-{}'.format(
+                        configuration.get('core', 'environment_suffix'))
+            },
+            'spec': {
+                'template': {
+                    'metadata': {
+                        'annotations': {
+                            'cluster-autoscaler.kubernetes.io/safe-to-evict':
+                                'false'
+                        }
+                    },
+                    'spec': {
+                        'containers': instance_containers,
+                        'volumes': instance_volumes,
+                        'restartPolicy': 'Never'
+                    }
+                },
+                'backoffLimit': 0,
+            },
+        }
+
+        return unique_job_name, yaml.safe_dump(kub_job_dict)
+
+    def create_cloudsql_proxy(self, instance_env):
+        cs_conns = []
+        cs_next_port = 3306
+
+        for cs_conn in self.cloudsql_connections:
+            cs_conns.append((cs_conn.fully_qualified_instance, cs_next_port))
+            instance_env[cs_conn.port_key] = cs_next_port
+            cs_next_port += 1
+
+        cloudsql_proxy_container = {
             'image':
-            os.environ.get('AIRFLOW_GOOGLE_CLOUDSQL_PROXY_IMAGE',
-                           'gcr.io/cloudsql-docker/gce-proxy:1.11'),
+                os.environ.get('AIRFLOW_GOOGLE_CLOUDSQL_PROXY_IMAGE',
+                               'gcr.io/cloudsql-docker/gce-proxy:1.11'),
             'name':
-            'cloudsql-proxy',
+                'cloudsql-proxy',
             'command': [
                 '/cloud_sql_proxy',
                 '-instances=' + ','.join(['%s=tcp:%d' % x for x in cs_conns]),
@@ -443,57 +513,15 @@ class KubernetesJobOperator(BaseOperator):
                 'name': 'airflow-cloudsql-instance-credentials',
                 'readOnly': True
             }]
-        })
+        }
 
-        instance_volumes = [{
+        cloudsql_proxy_volume = {
             'name': 'airflow-cloudsql-instance-credentials',
             'secret': {
                 'secretName': 'airflow-cloudsql-instance-credentials'
             }
-        }]
-
-        if self.service_account_secret_name is not None:
-            instance_volumes.append({
-                'name': self.service_account_secret_name,
-                'secret': {
-                    'secretName': self.service_account_secret_name
-                },
-            })
-
-        skip_names = {v['name'] for v in instance_volumes}
-        for v in self.volumes:
-            if v['name'] not in skip_names:
-                instance_volumes.append(v)
-
-        kub_job_dict = {
-            'apiVersion': 'batch/v1',
-            'kind': 'Job',
-            'metadata': {
-                'name':
-                unique_job_name,
-                'namespace':
-                'airflow-{}'.format(
-                    configuration.get('core', 'environment_suffix'))
-            },
-            'spec': {
-                'template': {
-                    'metadata': {
-                        'annotations': {
-                            'cluster-autoscaler.kubernetes.io/safe-to-evict':
-                            'false'
-                        }
-                    },
-                    'spec': {
-                        'containers': instance_containers,
-                        'volumes': instance_volumes,
-                        'restartPolicy': 'Never'
-                    }
-                },
-                'backoffLimit': 0,
-            },
         }
-
-        return unique_job_name, yaml.safe_dump(kub_job_dict)
+        return cloudsql_proxy_container, cloudsql_proxy_volume
 
     @provide_session
     def execute(self, context, session=None):
@@ -535,7 +563,7 @@ class KubernetesJobOperator(BaseOperator):
                 f.write(job_yaml_string)
                 f.flush()
                 result = subprocess.check_output(args=namespaced_kubectl() +
-                                                 ['apply', '-f', f.name])
+                                                      ['apply', '-f', f.name])
                 logging.info(result)
 
             # Setting pod_output to None, this will prevent a log_container_logs error
@@ -554,7 +582,7 @@ class KubernetesJobOperator(BaseOperator):
                 if stacktrace != "None":
                     logging.error(
                         "Got an exception during airflow worker execution!  Stack trace:\n{}"
-                        .format(traceback))
+                            .format(traceback))
 
                 if pod_output:
                     # let's clean up all our old pods. we'll kill the entry point (PID 1) in each running container
