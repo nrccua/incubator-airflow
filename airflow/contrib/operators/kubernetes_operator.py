@@ -428,7 +428,6 @@ class KubernetesJobOperator(BaseOperator):
                         'readOnly': True,
                     })
 
-
         if cloudsql_proxy_container_instance:
             instance_containers.append(cloudsql_proxy_container_instance)
 
@@ -452,7 +451,6 @@ class KubernetesJobOperator(BaseOperator):
         for v in self.volumes:
             if v['name'] not in skip_names:
                 instance_volumes.append(v)
-
 
         kub_job_dict = {
             'apiVersion': 'batch/v1',
@@ -554,6 +552,9 @@ class KubernetesJobOperator(BaseOperator):
         job_name, job_yaml_string = self.create_job_yaml(context)
 
         try:
+            # Setting pod_output to None, this will prevent a log_container_logs error
+            # if polling fails and self.polling_job_completion is not able to return pod_output.
+            pod_output = None
             logging.info(job_yaml_string)
             self.instance_names.append(
                 job_name)  # should happen once, but safety first!
@@ -565,10 +566,6 @@ class KubernetesJobOperator(BaseOperator):
                 result = subprocess.check_output(args=namespaced_kubectl() +
                                                       ['apply', '-f', f.name])
                 logging.info(result)
-
-            # Setting pod_output to None, this will prevent a log_container_logs error
-            # if polling fails and self.polling_job_completion is not able to return pod_output.
-            pod_output = None
 
             pod_output = self.poll_job_completion(job_name)
             pod_output = pod_output or self.get_pods(
@@ -611,3 +608,4 @@ class KubernetesJobOperator(BaseOperator):
                               extra={'err': ex})
 
             self.clean_up(job_name)
+
