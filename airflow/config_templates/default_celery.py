@@ -18,7 +18,6 @@ from airflow.exceptions import AirflowConfigException, AirflowException
 from airflow import configuration
 from airflow.utils.log.logging_mixin import LoggingMixin
 
-
 DEFAULT_CELERY_CONFIG = {
     'accept_content': ['json', 'pickle'],
     'event_serializer': 'json',
@@ -31,6 +30,9 @@ DEFAULT_CELERY_CONFIG = {
     'broker_transport_options': {'visibility_timeout': 21600},
     'result_backend': configuration.get('celery', 'CELERY_RESULT_BACKEND'),
     'worker_concurrency': configuration.getint('celery', 'CELERYD_CONCURRENCY'),
+    'database_engine_options': {
+        'connect_args': {'ssl': {'ca': '/mysql-sslcert/server-ca', 'cert': '/mysql-sslcert/client-cert',
+                                 'key': '/mysql-sslcert/client-key'}}}
 }
 
 celery_ssl_active = False
@@ -55,4 +57,3 @@ except Exception as e:
     raise AirflowException('Exception: There was an unknown Celery SSL Error. '
                            'Please ensure you want to use '
                            'SSL and/or have all necessary certs and key ({}).'.format(e))
-
