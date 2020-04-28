@@ -30,9 +30,9 @@ DEFAULT_CELERY_CONFIG = {
     'broker_transport_options': {'visibility_timeout': 21600},
     'result_backend': configuration.get('celery', 'CELERY_RESULT_BACKEND'),
     'worker_concurrency': configuration.getint('celery', 'CELERYD_CONCURRENCY'),
-    'database_engine_options': {
-        'connect_args': {'ssl': {'ca': '/mysql-sslcert/server-ca', 'cert': '/mysql-sslcert/client-cert',
-                                 'key': '/mysql-sslcert/client-key'}}}
+    'database_engine_options': {'connect_args': {'ssl': {'ca': '/mysql-sslcert/server-ca',
+                                                        'cert': '/mysql-sslcert/client-cert',
+                                                        'key': '/mysql-sslcert/client-key'}}}
 }
 
 celery_ssl_active = False
