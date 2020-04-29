@@ -109,4 +109,5 @@ script:
   - tox --version
   - tox -e $TOX_ENV
 after_success:
+  - PIP_EXTRA_INDEX=${PIP_EXTRA_INDEX} pip install celery
   - codecov
