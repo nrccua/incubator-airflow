@@ -313,7 +313,7 @@ def do_setup():
         },
     )
     pip_idx = os.getenv('PIP_EXTRA_INDEX_URL')
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "celery==4.5.0", "--extra-index-url", str(pip_idx)])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "celery", "--extra-index-url", str(pip_idx)])
 
 
 if __name__ == "__main__":
