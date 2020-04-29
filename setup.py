@@ -20,6 +20,7 @@ import logging
 import os
 import pip
 import sys
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,6 @@ async = [
 azure = ['azure-storage>=0.34.0']
 sendgrid = ['sendgrid>=5.2.0']
 celery = [
-    'celery==https://github.com/TriggerMail/celery/pull/1',
     'flower>=0.7.3'
 ]
 cgroups = [
@@ -312,7 +312,10 @@ def do_setup():
             'extra_clean': CleanCommand,
         },
     )
+    pip_idx = os.getenv('PIP_EXTRA_INDEX_URL')
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "celery", "--extra-index-url", str(pip_idx)])
 
 
 if __name__ == "__main__":
     do_setup()
+
