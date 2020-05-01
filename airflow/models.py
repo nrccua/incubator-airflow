@@ -341,18 +341,35 @@ class DagBag(BaseDagBag, LoggingMixin):
         from airflow.jobs import LocalTaskJob as LJ
         self.log.info("Finding 'running' jobs without a recent heartbeat")
         TI = TaskInstance
+        LDT = LastDeployedTime
         secs = configuration.getint('scheduler', 'scheduler_zombie_task_threshold')
         limit_dttm = datetime.utcnow() - timedelta(seconds=secs)
         self.log.info("Failing jobs without heartbeat after %s", limit_dttm)
+        for deploy_orphan in session.query(TI).join(
+            LJ, TI.job_id == LJ.id
+        ).join(
+            LDT, TI.job_id != LDT.last_deployed
+        ).filter(
+            TI.state == State.RUNNING
+        ).filter(
+            LJ.latest_heartbeat < LDT.last_deployed
+        ):
+            deploy_orphan.refresh_from_db()
+            if deploy_orphan and deploy_orphan.dag_id in self.dags:
+                dag = self.dags[deploy_orphan.dag_id]
+                task = dag.get_task(deploy_orphan.task_id)
+                deploy_orphan.task = task
+                deploy_orphan.handle_deploy_orphan()
 
         tis = (
             session.query(TI)
             .join(LJ, TI.job_id == LJ.id)
+            .join(LDT, TI.job_id != LDT.last_deployed)
             .filter(TI.state == State.RUNNING)
             .filter(
                 or_(
                     LJ.state != State.RUNNING,
-                    LJ.latest_heartbeat < limit_dttm,
+                    LJ.latest_heartbeat < limit_dttm
                 ))
             .all()
         )
@@ -431,7 +448,7 @@ class DagBag(BaseDagBag, LoggingMixin):
                     # in the primary SchedulerJob when the task being examined is UP_FOR_RETRY":
                     # YOU'RE WRONG - the secondary SchedulerJobs do that work too.
 
-                    self.log.info('Marked zombie job %s as failed', ti)
+                    self.log.info('Marked zombie job %s as zombied', ti)
                     Stats.incr(
                         'zombies_killed',
                         tags=[
@@ -815,6 +832,40 @@ class DagPickle(Base):
             dag.template_env = None
         self.pickle_hash = hash(dag)
         self.pickle = dag
+
+
+class LastDeployedTime(Base, LoggingMixin):
+    """
+    last_deployed_time stores the time airflow was last deployed.  This is used to allow task re-entry following a deploy.
+    """
+
+    __tablename__ = "last_deployed_time"
+
+    last_deployed = Column(DateTime, primary_key=True)
+
+    __table_args__ = (
+        Index('last_deployed', last_deployed, last_deployed),
+    )
+
+    def __init__(self):
+        self._log = logging.getLogger("airflow.last_deployed_time")
+
+    @staticmethod
+    @provide_session
+    def get_last_deployed_time(session=None):
+        """
+        Get the current scheduler state
+        """
+
+        if session is None:
+            raise Exception("Session is none - cannot get last_deployed_time!")
+
+        ldt = session.query(LastDeployedTime).all()
+        if len(ldt) > 1:
+            raise Exception("Found multiple rows for last_deployed_time - this should never happen!")
+
+        return ldt[0].last_deployed_time
+
 
 class SchedulerState(Base, LoggingMixin):
     """
@@ -1744,6 +1795,29 @@ class TaskInstance(Base, LoggingMixin):
 
         self.render_templates()
         task_copy.dry_run()
+
+    @provide_session
+    def handle_deploy_orphan(self, session=None):
+        self.log.warn("Marking task {} with state QUEUED because it was orphaned by a deploy.".format(self.task_id))
+        task = self.task
+        self.end_date = datetime.utcnow()
+        self.hostname = None
+        self.set_duration()
+        Stats.incr(
+            'deploy_zombies',
+            tags=[
+                'task_id:%s' % self.task_id,
+                'dag_id:%s' % self.dag_id,
+                'operator:%s' % task.__class__.__name__
+            ],
+        )
+
+        session.add(Log(State.NONE, self))
+
+        self.state = State.NONE
+
+        session.merge(self)
+        session.commit()
 
     @provide_session
     def handle_failure(self, error, test_mode=False, context=None, session=None):

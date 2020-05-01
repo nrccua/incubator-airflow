@@ -231,18 +231,19 @@ class BaseJob(Base, LoggingMixin):
         TI = models.TaskInstance
         DR = models.DagRun
 
-        task_is_resettable_predicate = or_(
-            TI.state.in_(resettable_states),
-            and_(
-                TI.state == State.RUNNING,
-                # These two operators are "remote" operators - that is, operators that
-                # spin up external resources.  They have been engineered to be idempotent,
-                # so even if they're in state running, they can be considered orphans.
-                # TODO make this an operator property rather than a mystical hard-coded string list.
-                TI.operator.in_(["AppEngineOperatorAsync", "KubernetesJobOperator"])
-            )
-        )
-
+        task_is_resettable_predicate = TI.state.in_(resettable_states)
+        # task_is_resettable_predicate = or_(
+        #     TI.state.in_(resettable_states),
+        #     and_(
+        #         TI.state == State.RUNNING,
+        #         # These two operators are "remote" operators - that is, operators that
+        #         # spin up external resources.  They have been engineered to be idempotent,
+        #         # so even if they're in state running, they can be considered orphans.
+        #         # TODO make this an operator property rather than a mystical hard-coded string list.
+        #         TI.operator.in_(["AppEngineOperatorAsync", "KubernetesJobOperator"])
+        #     )
+        # )
+        #
         if filter_by_dag_run is None:
             resettable_tis = (
                 session
