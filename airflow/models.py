@@ -392,7 +392,7 @@ class DagBag(BaseDagBag, LoggingMixin):
                         except subprocess.CalledProcessError:
                             logging.error("Failed to delete pod - it may have already been destroyed.")
 
-                    ti.handle_failure("{} killed as zombie".format(str(ti)))
+                    ti.handle_zombie("{} killed as zombie".format(str(ti)))
 
                     # TODO Tasks that are zombied out are not retried.  Fix this.  Details below:
                     # When trying to figure out why zombies aren't getting retried, one naturally finds themselves in
@@ -1817,8 +1817,14 @@ class TaskInstance(Base, LoggingMixin):
         session.merge(self)
         session.commit()
 
+    def handle_failure(self, error, test_mode=False, context=None):
+        self.handle_retry_event(error, test_mode, context, State.UP_FOR_RETRY)
+
+    def handle_zombie(self, error, test_mode=False, context=None):
+        self.handle_retry_event(error, test_mode, context, State.ZOMBIED)
+
     @provide_session
-    def handle_failure(self, error, test_mode=False, context=None, session=None):
+    def handle_retry_event(self, error, test_mode, context, retry_state, session=None):
         self.log.exception(error)
         task = self.task
         self.end_date = datetime.utcnow()
@@ -1862,8 +1868,8 @@ class TaskInstance(Base, LoggingMixin):
             # task instance run. We only mark task instance as FAILED if the
             # next task instance try_number exceeds the max_tries.
             if task.retries and self.try_number <= self.max_tries:
-                self.state = State.UP_FOR_RETRY
-                self.log.info('Marking task as UP_FOR_RETRY')
+                self.state = retry_state
+                self.log.info('Marking task as {}'.format(retry_state))
                 if task.email_on_retry and task.email:
                     self.email_alert(error, is_retry=True)
             else:
@@ -1880,7 +1886,7 @@ class TaskInstance(Base, LoggingMixin):
 
         # Handling callbacks pessimistically
         try:
-            if self.state == State.UP_FOR_RETRY and task.on_retry_callback:
+            if self.state == retry_state and task.on_retry_callback:
                 task.on_retry_callback(context)
             if self.state == State.FAILED and task.on_failure_callback:
                 task.on_failure_callback(context)

@@ -950,6 +950,43 @@ class SchedulerJob(BaseJob):
                     queue.append(ti.key)
 
     @provide_session
+    def _remove_zombies_from_executor(self,
+                                             simple_dag_bag,
+                                             session=None):
+        """
+        For all DAG IDs in the SimpleDagBag, look for task instances in the
+        ZOMBIED and set them to UP_FOR_RETRY.  Remove these task_instances
+        from the executor
+
+        :param simple_dag_bag: TaskInstances associated with DAGs in the
+        simple_dag_bag and with states in the old_state will be examined
+        :type simple_dag_bag: SimpleDagBag
+        """
+        tis_changed = 0
+        for ti in (
+            session
+                .query(models.TaskInstance)
+                .filter(models.TaskInstance.dag_id.in_(simple_dag_bag.dag_ids))
+                .filter(models.TaskInstance.state == State.ZOMBIED)
+                .filter(and_(
+                models.DagRun.dag_id == models.TaskInstance.dag_id,
+                models.DagRun.execution_date == models.TaskInstance.execution_date
+                ))
+                .with_for_update()
+                .all()
+        ):
+            self.executor.running.pop(ti.key, None)
+            self.executor.queued_tasks.pop(ti.key, None)
+            ti.set_state(State.UP_FOR_RETRY, session=session)
+            tis_changed += 1
+
+        if tis_changed > 0:
+            self.log.warning(
+                "Transitioned %s task instances to from state=ZOMBIED to state=UP_FOR_RETRYs",
+                tis_changed
+            )
+
+    @provide_session
     def _change_state_for_tis_without_dagrun(self,
                                              simple_dag_bag,
                                              old_states,
@@ -1626,6 +1663,9 @@ class SchedulerJob(BaseJob):
 
             # Send tasks for execution if available
             simple_dag_bag = SimpleDagBag(simple_dags)
+
+            self._remove_zombies_from_executor(simple_dag_bag)
+
             if len(simple_dags) > 0:
 
                 # Handle cases where a DAG run state is set (perhaps manually) to
