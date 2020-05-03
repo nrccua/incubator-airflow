@@ -1203,7 +1203,7 @@ class TaskInstance(Base, LoggingMixin):
         session.commit()
 
     @provide_session
-    def refresh_from_db(self, session=None, lock_for_update=False, include_queue_time=False, include_job_id=False):
+    def refresh_from_db(self, session=None, lock_for_update=False, include_queue_time=False):
         """
         Refreshes the task instance from the database based on the primary key
 
@@ -1232,8 +1232,6 @@ class TaskInstance(Base, LoggingMixin):
             self.pid = ti.pid
             if include_queue_time:
                 self.queued_dttm = ti.queued_dttm
-            if include_job_id:
-                self.job_id = ti.job_id
         else:
             self.state = None
 
