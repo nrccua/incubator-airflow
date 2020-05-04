@@ -27,12 +27,15 @@ depends_on = None
 
 from alembic import op
 import sqlalchemy as sa
+from airflow.models import LastDeployedTime
+from datetime import datetime
 
 def upgrade():
     op.create_table(
         'last_deployed_time',
         sa.Column('last_deployed', sa.DateTime(), primary_key=True)
     )
+    LastDeployedTime().set_last_deployed(datetime.utcnow())
 
 def downgrade():
     op.drop_table("last_deployed_time")

@@ -849,6 +849,26 @@ class LastDeployedTime(Base, LoggingMixin):
     def __init__(self):
         self._log = logging.getLogger("airflow.last_deployed_time")
 
+    @provide_session
+    def set_last_deployed(self, last_deployed_datetime, session=None):
+        """
+        Set last_deployed_time.time.  Should only be called once during the initial database migration.
+        """
+
+        if session is None:
+            raise Exception("Session is none - cannot set last_deployed_time!")
+
+        ldt = session.query(LastDeployedTime).all()
+        if len(ldt) > 1:
+            raise Exception("Found multiple rows for last_deployed_time - this should never happen!")
+
+        if len(ldt) == 0:
+            self.last_deployed = last_deployed_datetime
+            session.merge(self)
+            session.commit()
+        else:
+            raise Exception("LastDeployedTime should be set through automation if this isn't the very first deploy.  Something has gone wrong!")
+
 
 class SchedulerState(Base, LoggingMixin):
     """
