@@ -364,12 +364,11 @@ class DagBag(BaseDagBag, LoggingMixin):
         tis = (
             session.query(TI)
             .join(LJ, TI.job_id == LJ.id)
-            .join(LDT, TI.job_id != LDT.last_deployed)
             .filter(TI.state == State.RUNNING)
             .filter(
                 or_(
                     LJ.state != State.RUNNING,
-                    LJ.latest_heartbeat < limit_dttm
+                    LJ.latest_heartbeat < limit_dttm,
                 ))
             .all()
         )
@@ -849,22 +848,6 @@ class LastDeployedTime(Base, LoggingMixin):
 
     def __init__(self):
         self._log = logging.getLogger("airflow.last_deployed_time")
-
-    @staticmethod
-    @provide_session
-    def get_last_deployed_time(session=None):
-        """
-        Get the current scheduler state
-        """
-
-        if session is None:
-            raise Exception("Session is none - cannot get last_deployed_time!")
-
-        ldt = session.query(LastDeployedTime).all()
-        if len(ldt) > 1:
-            raise Exception("Found multiple rows for last_deployed_time - this should never happen!")
-
-        return ldt[0].last_deployed_time
 
 
 class SchedulerState(Base, LoggingMixin):
@@ -1796,7 +1779,7 @@ class TaskInstance(Base, LoggingMixin):
 
     @provide_session
     def handle_deploy_orphan(self, session=None):
-        self.log.warn("Marking task {} with state QUEUED because it was orphaned by a deploy.".format(self.task_id))
+        self.log.warn("Marking task {} with state None because it was orphaned by a deploy.".format(self.task_id))
         task = self.task
         self.end_date = datetime.utcnow()
         self.hostname = None
