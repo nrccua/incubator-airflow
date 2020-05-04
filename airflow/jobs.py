@@ -231,18 +231,6 @@ class BaseJob(Base, LoggingMixin):
         TI = models.TaskInstance
         DR = models.DagRun
 
-        task_is_resettable_predicate = or_(
-            TI.state.in_(resettable_states),
-            and_(
-                TI.state == State.RUNNING,
-                # These two operators are "remote" operators - that is, operators that
-                # spin up external resources.  They have been engineered to be idempotent,
-                # so even if they're in state running, they can be considered orphans.
-                # TODO make this an operator property rather than a mystical hard-coded string list.
-                TI.operator.in_(["AppEngineOperatorAsync", "KubernetesJobOperator"])
-            )
-        )
-
         if filter_by_dag_run is None:
             resettable_tis = (
                 session
@@ -251,20 +239,13 @@ class BaseJob(Base, LoggingMixin):
                     DR,
                     and_(
                         TI.dag_id == DR.dag_id,
-                        TI.execution_date == DR.execution_date)
-                ).filter(
+                        TI.execution_date == DR.execution_date))
+                .filter(
                     DR.state == State.RUNNING,
+                    DR.external_trigger == False,
                     DR.run_id.notlike(BackfillJob.ID_PREFIX + '%'),
-                    task_is_resettable_predicate
-                )
-            ).all()
+                    TI.state.in_(resettable_states))).all()
         else:
-            # TODO do the necessary discovery and testing to support remote operator orphan
-            #  detection when this method is called with filter_by_dag_run.
-            # The aforementioned call is only performed by the terribly named BackillJob.
-            # BackfillJobs appear to used solely by the SubDagOperator, which we do not use
-            # here at Bluecore.  Since we do not use this feature, we omit support of it in
-            # the interest of expediency.
             resettable_tis = filter_by_dag_run.get_task_instances(state=resettable_states,
                                                                   session=session)
         tis_to_reset = []
@@ -282,7 +263,7 @@ class BaseJob(Base, LoggingMixin):
         reset_tis = (
             session
             .query(TI)
-            .filter(or_(*filter_for_tis), task_is_resettable_predicate)
+            .filter(or_(*filter_for_tis), TI.state.in_(resettable_states))
             .with_for_update()
             .all())
         for ti in reset_tis:
@@ -969,6 +950,43 @@ class SchedulerJob(BaseJob):
                     queue.append(ti.key)
 
     @provide_session
+    def _remove_zombies_from_executor(self,
+                                             simple_dag_bag,
+                                             session=None):
+        """
+        For all DAG IDs in the SimpleDagBag, look for task instances in the
+        ZOMBIED and set them to UP_FOR_RETRY.  Remove these task_instances
+        from the executor
+
+        :param simple_dag_bag: TaskInstances associated with DAGs in the
+        simple_dag_bag and with states in the old_state will be examined
+        :type simple_dag_bag: SimpleDagBag
+        """
+        tis_changed = 0
+        for ti in (
+            session
+                .query(models.TaskInstance)
+                .filter(models.TaskInstance.dag_id.in_(simple_dag_bag.dag_ids))
+                .filter(models.TaskInstance.state == State.ZOMBIED)
+                .filter(and_(
+                models.DagRun.dag_id == models.TaskInstance.dag_id,
+                models.DagRun.execution_date == models.TaskInstance.execution_date
+                ))
+                .with_for_update()
+                .all()
+        ):
+            self.executor.running.pop(ti.key, None)
+            self.executor.queued_tasks.pop(ti.key, None)
+            ti.set_state(State.UP_FOR_RETRY, session=session)
+            tis_changed += 1
+
+        if tis_changed > 0:
+            self.log.warning(
+                "Transitioned %s task instances to from state=ZOMBIED to state=UP_FOR_RETRYs",
+                tis_changed
+            )
+
+    @provide_session
     def _change_state_for_tis_without_dagrun(self,
                                              simple_dag_bag,
                                              old_states,
@@ -1645,6 +1663,9 @@ class SchedulerJob(BaseJob):
 
             # Send tasks for execution if available
             simple_dag_bag = SimpleDagBag(simple_dags)
+
+            self._remove_zombies_from_executor(simple_dag_bag)
+
             if len(simple_dags) > 0:
 
                 # Handle cases where a DAG run state is set (perhaps manually) to
@@ -2617,25 +2638,11 @@ class LocalTaskJob(BaseJob):
                 self.log.warning("Recorded pid {ti.pid} does not match the current pid "
                                 "{current_pid}".format(**locals()))
                 raise AirflowException("PID of job runner does not match")
-        elif self.task_runner.return_code() is None and hasattr(self.task_runner, 'process'):
-            if ti.state in [State.NONE, State.SCHEDULED, State.QUEUED]:
-                self.log.warning(
-                    "State of task %s has been externally set to %s. I am still running this task, "
-                    "so I'm setting the state back to RUNNING.",
-                    ti.task_id,
-                    ti.state
-                )
-                ti.state = State.RUNNING
-                session.merge(ti)
-                session.commit()
-                return
-            else:
-                self.log.warning(
-                    "State of this instance has been externally set to %s. Taking the poison pill.",
-                    ti.state
-                )
-                self.task_runner.terminate()
-                self.terminating = True
-
-        session.merge(ti)
-        session.commit()
+        elif (self.task_runner.return_code() is None
+              and hasattr(self.task_runner, 'process')):
+            self.log.warning(
+                "State of this instance has been externally set to %s. Taking the poison pill.",
+                ti.state
+            )
+            self.task_runner.terminate()
+            self.terminating = True

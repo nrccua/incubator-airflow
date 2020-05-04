@@ -31,6 +31,7 @@ class State(object):
     NONE = None
     REMOVED = "removed"
     SCHEDULED = "scheduled"
+    ZOMBIED = "zombied"
 
     # set by the executor (t.b.d.)
     # LAUNCHED = "launched"
@@ -62,6 +63,7 @@ class State(object):
 
     state_color = {
         QUEUED: 'gray',
+        ZOMBIED: 'purple',
         RUNNING: 'lime',
         SUCCESS: 'green',
         SHUTDOWN: 'blue',

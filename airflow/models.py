@@ -341,9 +341,25 @@ class DagBag(BaseDagBag, LoggingMixin):
         from airflow.jobs import LocalTaskJob as LJ
         self.log.info("Finding 'running' jobs without a recent heartbeat")
         TI = TaskInstance
+        LDT = LastDeployedTime
         secs = configuration.getint('scheduler', 'scheduler_zombie_task_threshold')
         limit_dttm = datetime.utcnow() - timedelta(seconds=secs)
         self.log.info("Failing jobs without heartbeat after %s", limit_dttm)
+        for deploy_orphan in session.query(TI).join(
+            LJ, TI.job_id == LJ.id
+        ).join(
+            LDT, TI.job_id != LDT.last_deployed
+        ).filter(
+            TI.state == State.RUNNING
+        ).filter(
+            LJ.latest_heartbeat < LDT.last_deployed
+        ):
+            deploy_orphan.refresh_from_db()
+            if deploy_orphan and deploy_orphan.dag_id in self.dags:
+                dag = self.dags[deploy_orphan.dag_id]
+                task = dag.get_task(deploy_orphan.task_id)
+                deploy_orphan.task = task
+                deploy_orphan.handle_deploy_orphan()
 
         tis = (
             session.query(TI)
@@ -375,7 +391,7 @@ class DagBag(BaseDagBag, LoggingMixin):
                         except subprocess.CalledProcessError:
                             logging.error("Failed to delete pod - it may have already been destroyed.")
 
-                    ti.handle_failure("{} killed as zombie".format(str(ti)))
+                    ti.handle_zombie("{} killed as zombie".format(str(ti)))
 
                     # TODO Tasks that are zombied out are not retried.  Fix this.  Details below:
                     # When trying to figure out why zombies aren't getting retried, one naturally finds themselves in
@@ -431,7 +447,7 @@ class DagBag(BaseDagBag, LoggingMixin):
                     # in the primary SchedulerJob when the task being examined is UP_FOR_RETRY":
                     # YOU'RE WRONG - the secondary SchedulerJobs do that work too.
 
-                    self.log.info('Marked zombie job %s as failed', ti)
+                    self.log.info('Marked zombie job %s as zombied', ti)
                     Stats.incr(
                         'zombies_killed',
                         tags=[
@@ -816,6 +832,24 @@ class DagPickle(Base):
         self.pickle_hash = hash(dag)
         self.pickle = dag
 
+
+class LastDeployedTime(Base, LoggingMixin):
+    """
+    last_deployed_time stores the time airflow was last deployed.  This is used to allow task re-entry following a deploy.
+    """
+
+    __tablename__ = "last_deployed_time"
+
+    last_deployed = Column(DateTime, primary_key=True)
+
+    __table_args__ = (
+        Index('last_deployed', last_deployed, last_deployed),
+    )
+
+    def __init__(self):
+        self._log = logging.getLogger("airflow.last_deployed_time")
+
+
 class SchedulerState(Base, LoggingMixin):
     """
     scheduler_state stores the state of the scheduler. When state is RUNNING, all operators
@@ -1152,7 +1186,7 @@ class TaskInstance(Base, LoggingMixin):
         session.commit()
 
     @provide_session
-    def refresh_from_db(self, session=None, lock_for_update=False, include_queue_time=False, include_job_id=False):
+    def refresh_from_db(self, session=None, lock_for_update=False, include_queue_time=False):
         """
         Refreshes the task instance from the database based on the primary key
 
@@ -1181,8 +1215,6 @@ class TaskInstance(Base, LoggingMixin):
             self.pid = ti.pid
             if include_queue_time:
                 self.queued_dttm = ti.queued_dttm
-            if include_job_id:
-                self.job_id = ti.job_id
         else:
             self.state = None
 
@@ -1746,7 +1778,36 @@ class TaskInstance(Base, LoggingMixin):
         task_copy.dry_run()
 
     @provide_session
-    def handle_failure(self, error, test_mode=False, context=None, session=None):
+    def handle_deploy_orphan(self, session=None):
+        self.log.warn("Marking task {} with state None because it was orphaned by a deploy.".format(self.task_id))
+        task = self.task
+        self.end_date = datetime.utcnow()
+        self.hostname = None
+        self.set_duration()
+        Stats.incr(
+            'deploy_zombies',
+            tags=[
+                'task_id:%s' % self.task_id,
+                'dag_id:%s' % self.dag_id,
+                'operator:%s' % task.__class__.__name__
+            ],
+        )
+
+        session.add(Log(State.NONE, self))
+
+        self.state = State.NONE
+
+        session.merge(self)
+        session.commit()
+
+    def handle_failure(self, error, test_mode=False, context=None):
+        self.handle_retry_event(error, test_mode, context, State.UP_FOR_RETRY)
+
+    def handle_zombie(self, error, test_mode=False, context=None):
+        self.handle_retry_event(error, test_mode, context, State.ZOMBIED)
+
+    @provide_session
+    def handle_retry_event(self, error, test_mode, context, retry_state, session=None):
         self.log.exception(error)
         task = self.task
         self.end_date = datetime.utcnow()
@@ -1790,8 +1851,8 @@ class TaskInstance(Base, LoggingMixin):
             # task instance run. We only mark task instance as FAILED if the
             # next task instance try_number exceeds the max_tries.
             if task.retries and self.try_number <= self.max_tries:
-                self.state = State.UP_FOR_RETRY
-                self.log.info('Marking task as UP_FOR_RETRY')
+                self.state = retry_state
+                self.log.info('Marking task as {}'.format(retry_state))
                 if task.email_on_retry and task.email:
                     self.email_alert(error, is_retry=True)
             else:
@@ -1808,7 +1869,7 @@ class TaskInstance(Base, LoggingMixin):
 
         # Handling callbacks pessimistically
         try:
-            if self.state == State.UP_FOR_RETRY and task.on_retry_callback:
+            if self.state == retry_state and task.on_retry_callback:
                 task.on_retry_callback(context)
             if self.state == State.FAILED and task.on_failure_callback:
                 task.on_failure_callback(context)
